@@ -24,6 +24,7 @@ PAGE_LOG_PATH = "/var/log/cups/page_log"
 BW_PAGE_LIMIT = 200
 COLOR_PAGE_LIMIT = 200
 ALERT_INTERVAL = 25
+LOG_POLL_SECONDS = 5
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,9 +39,13 @@ with open("messages.json", "r", encoding="utf-8") as f:
 
 PRINT_DIR.mkdir(parents=True, exist_ok=True)
 
-# In-memory print job state: chat_id -> job dict
+# In-memory state
 user_jobs: dict[int, dict] = {}
 jobs_lock = threading.Lock()
+
+# Tracks bot-submitted jobs: cups_job_id (str) -> color_mode ("Gray" | "Color")
+tracked_jobs: dict[str, str] = {}
+tracked_jobs_lock = threading.Lock()
 
 
 # --- Database helpers ---
@@ -60,7 +65,7 @@ def db_query(sql: str, params: tuple = (), fetch_one=False, commit=False):
 
 
 def init_db():
-    """Ensure ink_counters table exists."""
+    """Ensure ink_counters table exists with log_offset tracking."""
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("""
@@ -69,10 +74,11 @@ def init_db():
                 bw_pages INTEGER DEFAULT 0,
                 color_pages INTEGER DEFAULT 0,
                 last_alert_bw INTEGER DEFAULT 0,
-                last_alert_color INTEGER DEFAULT 0
+                last_alert_color INTEGER DEFAULT 0,
+                log_offset INTEGER DEFAULT 0
             )
         """)
-        conn.execute("INSERT OR IGNORE INTO ink_counters (id, bw_pages, color_pages) VALUES (1, 0, 0)")
+        conn.execute("INSERT OR IGNORE INTO ink_counters (id, bw_pages, color_pages, log_offset) VALUES (1, 0, 0, 0)")
         conn.commit()
     finally:
         conn.close()
@@ -82,6 +88,15 @@ def get_ink_counters() -> tuple[int, int]:
     """Returns (bw_pages, color_pages)."""
     row = db_query("SELECT bw_pages, color_pages FROM ink_counters WHERE id = 1", fetch_one=True)
     return row if row else (0, 0)
+
+
+def get_log_offset() -> int:
+    row = db_query("SELECT log_offset FROM ink_counters WHERE id = 1", fetch_one=True)
+    return row[0] if row else 0
+
+
+def set_log_offset(offset: int):
+    db_query("UPDATE ink_counters SET log_offset = ? WHERE id = 1", (offset,), commit=True)
 
 
 def add_pages(bw: int = 0, color: int = 0):
@@ -131,11 +146,89 @@ def check_ink_alerts(bw_pages: int, color_pages: int, last_alert_bw: int, last_a
 
 
 def reset_ink_counters():
-    """Reset all counters to zero."""
+    """Reset all counters to zero (keeps log_offset to avoid re-counting)."""
     db_query(
         "UPDATE ink_counters SET bw_pages = 0, color_pages = 0, last_alert_bw = 0, last_alert_color = 0 WHERE id = 1",
         commit=True
     )
+
+
+# --- Page log watcher (background thread) ---
+
+def page_log_watcher():
+    """Tails CUPS page_log and counts all printed pages (bot + network jobs)."""
+    log.info("Page log watcher started, monitoring %s", PAGE_LOG_PATH)
+
+    while True:
+        try:
+            if not os.path.exists(PAGE_LOG_PATH):
+                time.sleep(LOG_POLL_SECONDS)
+                continue
+
+            offset = get_log_offset()
+            file_size = os.path.getsize(PAGE_LOG_PATH)
+
+            # Log was rotated or truncated
+            if file_size < offset:
+                offset = 0
+
+            if file_size == offset:
+                time.sleep(LOG_POLL_SECONDS)
+                continue
+
+            with open(PAGE_LOG_PATH, "r") as f:
+                f.seek(offset)
+                new_lines = f.readlines()
+                new_offset = f.tell()
+
+            bw_total = 0
+            color_total = 0
+
+            for line in new_lines:
+                parsed = parse_page_log_line(line)
+                if not parsed:
+                    continue
+
+                job_id, num_copies = parsed
+
+                # Determine color mode: check tracked bot jobs, default to color for network prints
+                with tracked_jobs_lock:
+                    color_mode = tracked_jobs.pop(job_id, None)
+
+                if color_mode is None:
+                    # Unknown job (network print) — assume color (conservative)
+                    color_total += num_copies
+                elif color_mode == "Gray":
+                    bw_total += num_copies
+                else:
+                    color_total += num_copies
+
+            if bw_total > 0 or color_total > 0:
+                add_pages(bw=bw_total, color=color_total)
+                log.info("Page log: +%d BW, +%d Color pages", bw_total, color_total)
+
+            set_log_offset(new_offset)
+
+        except Exception as e:
+            log.error("Page log watcher error: %s", e)
+
+        time.sleep(LOG_POLL_SECONDS)
+
+
+def parse_page_log_line(line: str) -> tuple[str, int] | None:
+    """Parse a CUPS page_log line. Returns (job_id, num_copies) or None.
+    Format: printer user job-id date-time page num-copies ..."""
+    parts = line.split()
+    if len(parts) < 6:
+        return None
+    if parts[0] != PRINTER_NAME:
+        return None
+    try:
+        job_id = parts[2]
+        num_copies = int(parts[5])
+        return (job_id, num_copies)
+    except (IndexError, ValueError):
+        return None
 
 
 # --- User helpers ---
@@ -173,39 +266,10 @@ def register_user(chat_id: int, real_name: str, role: str):
     )
 
 
-# --- CUPS page_log parsing ---
-
-def count_job_pages(job_id: str, max_wait: float = 10.0) -> int:
-    """Parse CUPS page_log for a specific job ID and return total pages printed.
-    Polls briefly since the log may not be written immediately."""
-    pattern = re.compile(
-        rf"^{re.escape(PRINTER_NAME)}\s+\S+\s+{re.escape(job_id)}\s+\S+\s+\d+\s+(\d+)"
-    )
-    deadline = time.time() + max_wait
-    total = 0
-
-    while time.time() < deadline:
-        time.sleep(2)
-        total = 0
-        try:
-            with open(PAGE_LOG_PATH, "r") as f:
-                for line in f:
-                    match = pattern.match(line)
-                    if match:
-                        total += int(match.group(1))  # num-copies per page
-        except FileNotFoundError:
-            pass
-
-        if total > 0:
-            break
-
-    return total
-
-
 # --- Print execution (runs in dedicated thread) ---
 
 def execute_print_job(chat_id: int, job: dict):
-    """Executes lp command in a background thread to avoid blocking the bot."""
+    """Executes lp command in a background thread."""
     cmd = [
         "lp", "-d", PRINTER_NAME,
         "-n", str(job["copies"]),
@@ -219,25 +283,13 @@ def execute_print_job(chat_id: int, job: dict):
     if result.returncode == 0:
         bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
 
-        # Extract job ID from lp output: "request id is HP-2515-123 (1 file(s))"
+        # Register job for the page log watcher to pick up with correct color mode
         match = re.search(r"request id is \S+-(\d+)", result.stdout)
         if match:
             job_id = match.group(1)
-            pages = count_job_pages(job_id)
-            if pages > 0:
-                if job["color"] == "Gray":
-                    add_pages(bw=pages)
-                else:
-                    add_pages(color=pages)
-                log.info("Job %s: %d pages (%s)", job_id, pages, job["color"])
-            else:
-                # Fallback: count as 1 page × copies if page_log unavailable
-                fallback = job["copies"]
-                if job["color"] == "Gray":
-                    add_pages(bw=fallback)
-                else:
-                    add_pages(color=fallback)
-                log.warning("Job %s: page_log unavailable, counted %d pages (fallback)", job_id, fallback)
+            with tracked_jobs_lock:
+                tracked_jobs[job_id] = job["color"]
+            log.info("Registered job %s as %s", job_id, job["color"])
     else:
         log.error("lp failed for user %d: %s", chat_id, result.stderr)
         bot.send_message(chat_id, MSGS["print_error"])
@@ -537,5 +589,9 @@ def handle_callback(call):
 
 if __name__ == '__main__':
     init_db()
+
+    # Start page log watcher in background
+    threading.Thread(target=page_log_watcher, daemon=True).start()
+
     log.info("Print server bot starting (threads=%d)...", 4)
     bot.infinity_polling()
