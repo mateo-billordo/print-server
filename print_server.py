@@ -601,6 +601,7 @@ def build_nickname_menu(has_nickname: bool) -> types.InlineKeyboardMarkup:
         markup.add(
             types.InlineKeyboardButton(MSGS["btn_nickname_create"], callback_data="nickname_change"),
         )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
     return markup
 
 
