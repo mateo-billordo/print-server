@@ -36,5 +36,11 @@
   "btn_auth_vip": "🟡 Autorizar como VIP",
   "btn_nickname_change": "✏️ Cambiar apodo",
   "btn_nickname_delete": "🗑️ Eliminar apodo",
-  "btn_nickname_create": "➕ Crear apodo"
+  "btn_nickname_create": "➕ Crear apodo",
+  "menu_title": "📋 *Menú de acciones rápidas:*\nElegí una opción:",
+  "menu_nickname": "👤 Apodo",
+  "menu_help": "❓ Ayuda",
+  "menu_users": "👥 Usuarios",
+  "menu_ink": "🖨️ Estado Tinta",
+  "menu_reset_ink": "🔄 Reset Tinta"
 }

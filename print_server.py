@@ -231,6 +231,49 @@ def parse_page_log_line(line: str) -> tuple[str, int] | None:
         return None
 
 
+# --- Command menu helpers ---
+
+USER_COMMANDS = [
+    types.BotCommand("start", "Iniciar el bot"),
+    types.BotCommand("ayuda", "Ver comandos disponibles"),
+    types.BotCommand("apodo", "Cambiar o eliminar tu apodo"),
+    types.BotCommand("menu", "Menú de acciones rápidas"),
+]
+
+ADMIN_COMMANDS = USER_COMMANDS + [
+    types.BotCommand("usuarios", "Listar usuarios autorizados"),
+    types.BotCommand("ink", "Estado de contadores de tinta"),
+    types.BotCommand("reset_ink", "Reiniciar contadores de tinta"),
+]
+
+
+def refresh_commands_for_user(chat_id: int, role: str):
+    """Set the command menu for a specific user based on their role."""
+    commands = ADMIN_COMMANDS if role == "VIP" and chat_id == ADMIN_ID else USER_COMMANDS
+    try:
+        bot.set_my_commands(commands, scope=types.BotCommandScopeChat(chat_id))
+    except Exception as e:
+        log.error("Failed to set commands for user %d: %s", chat_id, e)
+
+
+def refresh_all_commands():
+    """Set commands for all registered users + admin on startup."""
+    # Default commands for unknown users (just /start)
+    try:
+        bot.set_my_commands([types.BotCommand("start", "Iniciar el bot")])
+    except Exception as e:
+        log.error("Failed to set default commands: %s", e)
+
+    # Admin
+    refresh_commands_for_user(ADMIN_ID, "VIP")
+
+    # All registered users
+    rows = db_query("SELECT id, role FROM users")
+    for uid, role in rows:
+        if uid != ADMIN_ID:
+            refresh_commands_for_user(uid, role)
+
+
 # --- User helpers ---
 
 def get_user_role(chat_id: int) -> str | None:
@@ -341,6 +384,24 @@ def build_print_menu(chat_id: int) -> types.InlineKeyboardMarkup:
     return markup
 
 
+def build_main_menu(chat_id: int) -> types.InlineKeyboardMarkup:
+    """Build role-appropriate main menu inline keyboard."""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["menu_nickname"], callback_data="menu_apodo"),
+        types.InlineKeyboardButton(MSGS["menu_help"], callback_data="menu_ayuda"),
+    )
+    if chat_id == ADMIN_ID:
+        markup.add(
+            types.InlineKeyboardButton(MSGS["menu_users"], callback_data="menu_usuarios"),
+            types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_ink"),
+        )
+        markup.add(
+            types.InlineKeyboardButton(MSGS["menu_reset_ink"], callback_data="menu_reset_ink"),
+        )
+    return markup
+
+
 # --- Command handlers ---
 
 @bot.message_handler(commands=['start'])
@@ -421,6 +482,14 @@ def cmd_nickname(message):
         markup = build_nickname_menu(has_nickname=False)
 
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['menu'])
+def cmd_menu(message):
+    chat_id = message.chat.id
+    if not get_user_role(chat_id):
+        return
+    bot.send_message(chat_id, MSGS["menu_title"], reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
 
 
 # --- Text message handlers ---
@@ -512,6 +581,7 @@ def handle_callback(call):
         target_name = parts[3]
 
         register_user(target_id, target_name, chosen_role)
+        refresh_commands_for_user(target_id, chosen_role)
         bot.edit_message_text(
             MSGS["admin_auth_confirmed"].format(name=target_name, role=chosen_role),
             chat_id, msg_id
@@ -531,6 +601,56 @@ def handle_callback(call):
         set_nickname_state(chat_id, nickname="", waiting=0)
         bot.edit_message_text(MSGS["nickname_deleted"], chat_id, msg_id)
         bot.answer_callback_query(call.id)
+        return
+
+    # --- Main menu callbacks ---
+    if call.data == "menu_apodo":
+        bot.answer_callback_query(call.id)
+        nickname, _, _ = get_user_profile(chat_id)
+        if nickname:
+            text = MSGS["nickname_current"].format(nickname=nickname)
+            markup = build_nickname_menu(has_nickname=True)
+        else:
+            text = MSGS["nickname_empty"]
+            markup = build_nickname_menu(has_nickname=False)
+        bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    if call.data == "menu_ayuda":
+        bot.answer_callback_query(call.id)
+        help_text = MSGS["help_admin"] if chat_id == ADMIN_ID else MSGS["help"]
+        bot.edit_message_text(help_text, chat_id, msg_id, parse_mode="Markdown")
+        return
+
+    if call.data == "menu_usuarios":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        rows = db_query("SELECT id, real_name, nickname, role FROM users")
+        response = MSGS["user_list_title"]
+        for uid, name, nick, role in rows:
+            nick_display = f" ({nick})" if nick else ""
+            response += f"• **ID:** `{uid}` | **Nombre:** {name}{nick_display} | **Rol:** `{role}`\n"
+        bot.edit_message_text(response, chat_id, msg_id, parse_mode="Markdown")
+        return
+
+    if call.data == "menu_ink":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        bw, color = get_ink_counters()
+        bot.edit_message_text(
+            MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
+            chat_id, msg_id, parse_mode="Markdown"
+        )
+        return
+
+    if call.data == "menu_reset_ink":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        reset_ink_counters()
+        bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id)
         return
 
     # --- Print job callbacks ---
@@ -589,6 +709,7 @@ def handle_callback(call):
 
 if __name__ == '__main__':
     init_db()
+    refresh_all_commands()
 
     # Start page log watcher in background
     threading.Thread(target=page_log_watcher, daemon=True).start()
