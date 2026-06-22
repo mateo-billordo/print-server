@@ -658,7 +658,7 @@ def cmd_start(message):
         return
 
     db_query("UPDATE users SET real_name = ? WHERE id = ?", (tg_name, chat_id), commit=True)
-    bot.reply_to(message, MSGS["welcome"].format(name=tg_name))
+    bot.reply_to(message, MSGS["welcome"].format(name=tg_name), reply_markup=build_main_menu(chat_id))
 
 
 @bot.message_handler(commands=['ayuda'])
@@ -886,7 +886,8 @@ def handle_text(message):
             bot.reply_to(message, MSGS["nickname_too_long"])
             return
         set_nickname_state(message.chat.id, nickname=new_nickname, waiting=0)
-        bot.reply_to(message, MSGS["nickname_saved"].format(nickname=new_nickname), parse_mode="Markdown")
+        bot.reply_to(message, MSGS["nickname_saved"].format(nickname=new_nickname),
+                     reply_markup=build_main_menu(message.chat.id), parse_mode="Markdown")
         return
 
     bot.reply_to(message, MSGS["unknown_command"])
@@ -956,7 +957,8 @@ def handle_callback(call):
             chat_id, msg_id
         )
         bot.answer_callback_query(call.id)
-        bot.send_message(target_id, MSGS["user_auth_granted"].format(admin=call.from_user.first_name))
+        bot.send_message(target_id, MSGS["user_auth_granted"].format(admin=call.from_user.first_name),
+                         reply_markup=build_main_menu(target_id))
         return
 
     # --- Nickname callbacks ---
@@ -968,7 +970,7 @@ def handle_callback(call):
 
     if call.data == "nickname_delete":
         set_nickname_state(chat_id, nickname="", waiting=0)
-        bot.edit_message_text(MSGS["nickname_deleted"], chat_id, msg_id)
+        bot.edit_message_text(MSGS["nickname_deleted"], chat_id, msg_id, reply_markup=build_main_menu(chat_id))
         bot.answer_callback_query(call.id)
         return
 
@@ -988,7 +990,7 @@ def handle_callback(call):
     if call.data == "menu_ayuda":
         bot.answer_callback_query(call.id)
         help_text = MSGS["help_admin"] if chat_id == ADMIN_ID else MSGS["help"]
-        bot.edit_message_text(help_text, chat_id, msg_id, parse_mode="Markdown")
+        bot.edit_message_text(help_text, chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
         return
 
     if call.data == "menu_usuarios":
@@ -1000,7 +1002,7 @@ def handle_callback(call):
         for uid, name, nick, role in rows:
             nick_display = f" ({nick})" if nick else ""
             response += f"• **ID:** `{uid}` | **Nombre:** {name}{nick_display} | **Rol:** `{role}`\n"
-        bot.edit_message_text(response, chat_id, msg_id, parse_mode="Markdown")
+        bot.edit_message_text(response, chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
         return
 
     if call.data == "menu_ink":
@@ -1010,7 +1012,7 @@ def handle_callback(call):
         bw, color = get_ink_counters()
         bot.edit_message_text(
             MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
-            chat_id, msg_id, parse_mode="Markdown"
+            chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown"
         )
         return
 
@@ -1019,7 +1021,7 @@ def handle_callback(call):
             return
         bot.answer_callback_query(call.id)
         reset_ink_counters()
-        bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id)
+        bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id, reply_markup=build_main_menu(chat_id))
         return
 
     # --- Print job callbacks ---
