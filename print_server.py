@@ -1100,7 +1100,9 @@ def handle_callback(call):
     if call.data == "menu_ayuda":
         bot.answer_callback_query(call.id)
         help_text = MSGS["help_admin"] if chat_id == ADMIN_ID else MSGS["help"]
-        bot.edit_message_text(help_text, chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+        bot.edit_message_text(help_text, chat_id, msg_id, reply_markup=markup, parse_mode="Markdown")
         return
 
     # --- Users sub-menu ---
