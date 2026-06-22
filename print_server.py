@@ -49,6 +49,9 @@ PRINT_DIR.mkdir(parents=True, exist_ok=True)
 user_jobs: dict[int, dict] = {}
 jobs_lock = threading.Lock()
 
+# User interaction state for multi-step flows (email add/remove)
+user_state: dict[int, str] = {}
+
 # Tracks bot-submitted jobs: cups_job_id (str) -> color_mode ("Gray" | "Color")
 tracked_jobs: dict[str, str] = {}
 tracked_jobs_lock = threading.Lock()
@@ -627,16 +630,71 @@ def build_main_menu(chat_id: int) -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(MSGS["menu_nickname"], callback_data="menu_apodo"),
+        types.InlineKeyboardButton(MSGS["menu_emails"], callback_data="menu_emails_sub"),
+    )
+    markup.add(
         types.InlineKeyboardButton(MSGS["menu_help"], callback_data="menu_ayuda"),
     )
     if chat_id == ADMIN_ID:
         markup.add(
-            types.InlineKeyboardButton(MSGS["menu_users"], callback_data="menu_usuarios"),
-            types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_ink"),
+            types.InlineKeyboardButton(MSGS["menu_users"], callback_data="menu_users_sub"),
+            types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_tinta_sub"),
         )
+    return markup
+
+
+def build_users_sub_menu() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_users_list"], callback_data="usub_list"),
+        types.InlineKeyboardButton(MSGS["sub_users_remove"], callback_data="usub_remove"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_users_role"], callback_data="usub_role"),
+    )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+    return markup
+
+
+def build_emails_sub_menu(chat_id: int) -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_emails_list"], callback_data="esub_list"),
+        types.InlineKeyboardButton(MSGS["sub_emails_add"], callback_data="esub_add"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_emails_remove"], callback_data="esub_remove"),
+    )
+    if chat_id == ADMIN_ID:
         markup.add(
-            types.InlineKeyboardButton(MSGS["menu_reset_ink"], callback_data="menu_reset_ink"),
+            types.InlineKeyboardButton(MSGS["sub_emails_all"], callback_data="esub_all"),
+            types.InlineKeyboardButton(MSGS["sub_emails_config"], callback_data="esub_config"),
         )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+    return markup
+
+
+def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
+        types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
+    )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+    return markup
+
+
+def build_user_select_buttons(action_prefix: str) -> types.InlineKeyboardMarkup:
+    """Build inline buttons listing users for selection (remove/role change)."""
+    rows = db_query("SELECT id, real_name, nickname, role FROM users")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for uid, name, nick, role in rows:
+        if uid == ADMIN_ID:
+            continue  # Can't remove/change admin
+        display = f"{name} ({nick})" if nick else name
+        label = f"{display} [{role}]"
+        markup.add(types.InlineKeyboardButton(label, callback_data=f"{action_prefix}_{uid}"))
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_users_sub"))
     return markup
 
 
@@ -878,16 +936,62 @@ def handle_text(message):
     if not get_user_role(message.chat.id):
         return
 
-    _, _, waiting = get_user_profile(message.chat.id)
+    chat_id = message.chat.id
+    _, _, waiting = get_user_profile(chat_id)
 
     if waiting == 1:
         new_nickname = message.text.strip()
         if len(new_nickname) > 20:
             bot.reply_to(message, MSGS["nickname_too_long"])
             return
-        set_nickname_state(message.chat.id, nickname=new_nickname, waiting=0)
+        set_nickname_state(chat_id, nickname=new_nickname, waiting=0)
         bot.reply_to(message, MSGS["nickname_saved"].format(nickname=new_nickname),
-                     reply_markup=build_main_menu(message.chat.id), parse_mode="Markdown")
+                     reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
+        return
+
+    # Email add/remove waiting states
+    state = user_state.pop(chat_id, None)
+    if state == "waiting_add_email":
+        addr = message.text.strip().lower()
+        # Admin can do: email user_id
+        target_id = chat_id
+        parts = addr.split()
+        if chat_id == ADMIN_ID and len(parts) == 2:
+            addr = parts[0]
+            try:
+                target_id = int(parts[1])
+            except ValueError:
+                bot.reply_to(message, MSGS["email_add_invalid_id"])
+                return
+        if add_user_email(target_id, addr):
+            bot.reply_to(message, MSGS["email_added"].format(email=addr),
+                         reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        else:
+            bot.reply_to(message, MSGS["email_already_exists"].format(email=addr),
+                         reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        return
+
+    if state == "waiting_remove_email":
+        addr = message.text.strip().lower()
+        if chat_id == ADMIN_ID:
+            # Admin can remove any email
+            conn = sqlite3.connect(DB_PATH)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_emails WHERE email = ?", (addr,))
+                conn.commit()
+                removed = cursor.rowcount > 0
+            finally:
+                conn.close()
+        else:
+            removed = remove_user_email(chat_id, addr)
+
+        if removed:
+            bot.reply_to(message, MSGS["email_removed"].format(email=addr),
+                         reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        else:
+            bot.reply_to(message, MSGS["email_not_found"].format(email=addr),
+                         reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
         return
 
     bot.reply_to(message, MSGS["unknown_command"])
@@ -975,6 +1079,12 @@ def handle_callback(call):
         return
 
     # --- Main menu callbacks ---
+    if call.data == "menu_back":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["menu_title"], chat_id, msg_id,
+                             reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
+        return
+
     if call.data == "menu_apodo":
         bot.answer_callback_query(call.id)
         nickname, _, _ = get_user_profile(chat_id)
@@ -993,7 +1103,16 @@ def handle_callback(call):
         bot.edit_message_text(help_text, chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
         return
 
-    if call.data == "menu_usuarios":
+    # --- Users sub-menu ---
+    if call.data == "menu_users_sub":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_users_title"], chat_id, msg_id,
+                             reply_markup=build_users_sub_menu(), parse_mode="Markdown")
+        return
+
+    if call.data == "usub_list":
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
@@ -1001,27 +1120,152 @@ def handle_callback(call):
         response = MSGS["user_list_title"]
         for uid, name, nick, role in rows:
             nick_display = f" ({nick})" if nick else ""
-            response += f"• **ID:** `{uid}` | **Nombre:** {name}{nick_display} | **Rol:** `{role}`\n"
-        bot.edit_message_text(response, chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
+            response += f"• {name}{nick_display} — `{role}`\n"
+        bot.edit_message_text(response, chat_id, msg_id,
+                             reply_markup=build_users_sub_menu(), parse_mode="Markdown")
         return
 
-    if call.data == "menu_ink":
+    if call.data == "usub_remove":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_users_select_remove"], chat_id, msg_id,
+                             reply_markup=build_user_select_buttons("rmuser"))
+        return
+
+    if call.data == "usub_role":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_users_select_role"], chat_id, msg_id,
+                             reply_markup=build_user_select_buttons("chrole"))
+        return
+
+    if call.data.startswith("rmuser_"):
+        if chat_id != ADMIN_ID:
+            return
+        target_id = int(call.data.split("_")[1])
+        row = db_query("SELECT real_name FROM users WHERE id = ?", (target_id,), fetch_one=True)
+        name = row[0] if row else str(target_id)
+        db_query("DELETE FROM users WHERE id = ?", (target_id,), commit=True)
+        # Clear their commands
+        try:
+            bot.delete_my_commands(scope=types.BotCommandScopeChat(target_id))
+        except Exception:
+            pass
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["user_removed"].format(name=name), chat_id, msg_id,
+                             reply_markup=build_users_sub_menu())
+        return
+
+    if call.data.startswith("chrole_"):
+        if chat_id != ADMIN_ID:
+            return
+        target_id = int(call.data.split("_")[1])
+        row = db_query("SELECT real_name, role FROM users WHERE id = ?", (target_id,), fetch_one=True)
+        if row:
+            name, current_role = row
+            new_role = "VIP" if current_role == "USER" else "USER"
+            db_query("UPDATE users SET role = ? WHERE id = ?", (new_role, target_id), commit=True)
+            refresh_commands_for_user(target_id, new_role)
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                MSGS["user_role_changed"].format(name=name, role=new_role), chat_id, msg_id,
+                reply_markup=build_users_sub_menu()
+            )
+        return
+
+    # --- Emails sub-menu ---
+    if call.data == "menu_emails_sub":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_emails_title"], chat_id, msg_id,
+                             reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        return
+
+    if call.data == "esub_list":
+        bot.answer_callback_query(call.id)
+        emails = get_user_emails(chat_id)
+        if emails:
+            listing = "\n".join(f"• `{e}`" for e in emails)
+            text = MSGS["email_list"].format(emails=listing)
+        else:
+            text = MSGS["email_list_empty"]
+        bot.edit_message_text(text, chat_id, msg_id,
+                             reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        return
+
+    if call.data == "esub_add":
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_add_email"
+        bot.edit_message_text(MSGS["email_prompt_add"], chat_id, msg_id)
+        return
+
+    if call.data == "esub_remove":
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_remove_email"
+        bot.edit_message_text(MSGS["email_prompt_remove"], chat_id, msg_id)
+        return
+
+    if call.data == "esub_all":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        all_emails = get_all_user_emails()
+        if not all_emails:
+            text = MSGS["email_admin_empty"]
+        else:
+            lines = []
+            for uid, addr in all_emails:
+                if uid == UNASSIGNED_USER_ID:
+                    lines.append(f"• `{addr}` → _(sin asignar)_")
+                else:
+                    row = db_query("SELECT real_name FROM users WHERE id = ?", (uid,), fetch_one=True)
+                    name = row[0] if row else str(uid)
+                    lines.append(f"• `{addr}` → {name}")
+            text = MSGS["email_admin_list"].format(emails="\n".join(lines))
+        bot.edit_message_text(text, chat_id, msg_id,
+                             reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        return
+
+    if call.data == "esub_config":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        address, _, timer = get_email_config()
+        status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
+        bot.edit_message_text(
+            MSGS["email_config_show"].format(status=status, address=address or "(no configurado)", timer=timer),
+            chat_id, msg_id, reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown"
+        )
+        return
+
+    # --- Tinta sub-menu ---
+    if call.data == "menu_tinta_sub":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_tinta_title"], chat_id, msg_id,
+                             reply_markup=build_tinta_sub_menu(), parse_mode="Markdown")
+        return
+
+    if call.data == "tsub_status":
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
         bw, color = get_ink_counters()
         bot.edit_message_text(
             MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
-            chat_id, msg_id, reply_markup=build_main_menu(chat_id), parse_mode="Markdown"
+            chat_id, msg_id, reply_markup=build_tinta_sub_menu(), parse_mode="Markdown"
         )
         return
 
-    if call.data == "menu_reset_ink":
+    if call.data == "tsub_reset":
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
         reset_ink_counters()
-        bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id, reply_markup=build_main_menu(chat_id))
+        bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id,
+                             reply_markup=build_tinta_sub_menu())
         return
 
     # --- Print job callbacks ---
