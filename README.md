@@ -167,9 +167,6 @@ docker logs -f print_tg_bot
 | `/ayuda` | Show available commands |
 | `/apodo` | Manage your nickname |
 | `/menu` | Quick actions inline keyboard |
-| `/emails` | List your registered email addresses |
-| `/agregar_email <email>` | Register an email for print-by-email |
-| `/borrar_email <email>` | Remove a registered email |
 
 ### Admin only
 
@@ -178,12 +175,36 @@ docker logs -f print_tg_bot
 | `/usuarios` | List all authorized users and roles |
 | `/ink` | Show current page counters (B&W and Color) |
 | `/reset_ink` | Reset counters to zero after refilling cartridges |
-| `/email_receptor` | Show email-to-print configuration |
-| `/email_receptor set-address=<email>` | Set Gmail address for IMAP |
-| `/email_receptor set-password=<app_pw>` | Set Gmail app password (encrypted) |
-| `/email_receptor set-timer=<minutes>` | Set check interval (0 = disabled) |
+| `/email_receptor` | Show/configure email-to-print (set-address, set-password, set-timer) |
 | `/emails_admin` | List all registered emails with user associations |
-| `/agregar_email <email> <user_id>` | Assign email to a specific user |
+
+### Menu Navigation
+
+The `/menu` command opens an inline keyboard with sub-menus:
+
+```
+Main Menu
+├── 👤 Apodo — manage nickname
+├── 📧 Emails (sub-menu)
+│   ├── 📋 Mis emails — list registered emails
+│   ├── ➕ Agregar — register email (type in chat)
+│   ├── ➖ Eliminar — remove email (type in chat)
+│   ├── 📋 Todos (admin) — all emails with user links
+│   ├── ⚙️ Receptor (admin) — email-to-print config
+│   └── ← Volver
+├── ❓ Ayuda — show help
+├── 👥 Usuarios (admin, sub-menu)
+│   ├── 📋 Listar — show users and roles
+│   ├── 🗑️ Eliminar — pick user to remove
+│   ├── 🔄 Cambiar rol — pick user to toggle USER/VIP
+│   └── ← Volver
+└── 🖨️ Tinta (admin, sub-menu)
+    ├── 📊 Estado — page counters
+    ├── 🔄 Reiniciar — reset counters
+    └── ← Volver
+```
+
+The menu reappears after every interaction so you never need to type `/menu` again.
 
 ### Printing via Telegram
 
