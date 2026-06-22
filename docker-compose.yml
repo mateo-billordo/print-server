@@ -1,0 +1,12 @@
+services:
+  print-bot:
+    build: .
+    container_name: print_tg_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ${CUPS_RUN_PATH}:/var/run/cups
+      - ${CUPS_LOG_PATH}:/var/log/cups
+      - ${DATA_PATH}:/data
+    network_mode: "host"
