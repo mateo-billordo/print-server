@@ -2,6 +2,26 @@
 
 A Telegram bot that turns a legacy laptop into a home print server. Authorized family members can print documents (PDFs) and images by sending them to a private Telegram chat. The printer is also shared on the local network for direct printing from any device.
 
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Hardware](#hardware)
+- [Setup](#setup)
+  - [Prerequisites](#prerequisites)
+  - [Environment variables](#environment-variables)
+  - [CUPS configuration](#cups-configuration)
+  - [Deploy](#deploy)
+  - [Verify](#verify)
+- [Commands](#commands)
+- [Printing via Telegram](#printing-via-telegram)
+- [Printing via network](#printing-via-network)
+- [Printing via email](#printing-via-email)
+- [Project Structure](#project-structure)
+- [Database Schema](#database-schema)
+- [Ink Alert Logic](#ink-alert-logic)
+- [Updating](#updating)
+
 ## Features
 
 - **Access control** — Admin approves users via inline buttons (USER / VIP roles)
