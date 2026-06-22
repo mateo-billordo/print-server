@@ -6,9 +6,13 @@ import subprocess
 import logging
 import threading
 import time
+import imaplib
+import email as email_lib
+from email.header import decode_header
 from pathlib import Path
 from telebot import TeleBot, types
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
 # --- Configuration ---
 
@@ -17,6 +21,7 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip().strip("'\""))
 PRINTER_NAME = os.getenv("PRINTER_NAME", "HP-2515")
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "").encode()
 DB_PATH = "/data/impresora_usuarios.db"
 PRINT_DIR = Path("/data/impresiones")
 PAGE_LOG_PATH = "/var/log/cups/page_log"
@@ -25,6 +30,7 @@ BW_PAGE_LIMIT = 200
 COLOR_PAGE_LIMIT = 200
 ALERT_INTERVAL = 25
 LOG_POLL_SECONDS = 5
+UNASSIGNED_USER_ID = -1
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +53,9 @@ jobs_lock = threading.Lock()
 tracked_jobs: dict[str, str] = {}
 tracked_jobs_lock = threading.Lock()
 
+# Email thread wake event
+email_wake_event = threading.Event()
+
 
 # --- Database helpers ---
 
@@ -65,7 +74,7 @@ def db_query(sql: str, params: tuple = (), fetch_one=False, commit=False):
 
 
 def init_db():
-    """Ensure ink_counters table exists with log_offset tracking."""
+    """Ensure all tables exist."""
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("""
@@ -79,6 +88,22 @@ def init_db():
             )
         """)
         conn.execute("INSERT OR IGNORE INTO ink_counters (id, bw_pages, color_pages, log_offset) VALUES (1, 0, 0, 0)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS email_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                address TEXT DEFAULT '',
+                encrypted_password TEXT DEFAULT '',
+                timer_minutes INTEGER DEFAULT 0
+            )
+        """)
+        conn.execute("INSERT OR IGNORE INTO email_config (id) VALUES (1)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL UNIQUE
+            )
+        """)
         conn.commit()
     finally:
         conn.close()
@@ -151,6 +176,63 @@ def reset_ink_counters():
         "UPDATE ink_counters SET bw_pages = 0, color_pages = 0, last_alert_bw = 0, last_alert_color = 0 WHERE id = 1",
         commit=True
     )
+
+
+# --- Email config helpers ---
+
+def get_email_config() -> tuple[str, str, int]:
+    """Returns (address, encrypted_password, timer_minutes)."""
+    row = db_query("SELECT address, encrypted_password, timer_minutes FROM email_config WHERE id = 1", fetch_one=True)
+    return row if row else ("", "", 0)
+
+
+def set_email_config(field: str, value):
+    db_query(f"UPDATE email_config SET {field} = ? WHERE id = 1", (value,), commit=True)
+
+
+def encrypt_password(plain: str) -> str:
+    f = Fernet(ENCRYPTION_KEY)
+    return f.encrypt(plain.encode()).decode()
+
+
+def decrypt_password(encrypted: str) -> str:
+    f = Fernet(ENCRYPTION_KEY)
+    return f.decrypt(encrypted.encode()).decode()
+
+
+def get_user_emails(user_id: int) -> list[str]:
+    rows = db_query("SELECT email FROM user_emails WHERE user_id = ?", (user_id,))
+    return [r[0] for r in rows]
+
+
+def get_all_user_emails() -> list[tuple[int, str]]:
+    """Returns list of (user_id, email)."""
+    return db_query("SELECT user_id, email FROM user_emails")
+
+
+def add_user_email(user_id: int, addr: str) -> bool:
+    try:
+        db_query("INSERT INTO user_emails (user_id, email) VALUES (?, ?)", (user_id, addr.lower()), commit=True)
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def remove_user_email(user_id: int, addr: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM user_emails WHERE user_id = ? AND email = ?", (user_id, addr.lower()))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def find_user_by_email(addr: str) -> int | None:
+    """Returns user_id for an email address, or None."""
+    row = db_query("SELECT user_id FROM user_emails WHERE email = ?", (addr.lower(),), fetch_one=True)
+    return row[0] if row else None
 
 
 # --- Page log watcher (background thread) ---
@@ -229,6 +311,162 @@ def parse_page_log_line(line: str) -> tuple[str, int] | None:
         return (job_id, num_copies)
     except (IndexError, ValueError):
         return None
+
+
+# --- Email processing thread ---
+
+def parse_email_body(body: str) -> tuple[int, str]:
+    """Parse 'copias: N, modo: color|bn'. Returns (copies, color_mode)."""
+    copies = 1
+    color_mode = "Gray"
+    if not body:
+        return copies, color_mode
+    body_lower = body.lower().strip()
+    m = re.search(r'copias:\s*(\d+)', body_lower)
+    if m:
+        copies = max(1, int(m.group(1)))
+    m = re.search(r'modo:\s*(color|bn)', body_lower)
+    if m:
+        color_mode = "Color" if m.group(1) == "color" else "Gray"
+    return copies, color_mode
+
+
+def get_email_text_body(msg) -> str:
+    """Extract plain text body from email message."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    return payload.decode(charset, errors="replace")
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            charset = msg.get_content_charset() or "utf-8"
+            return payload.decode(charset, errors="replace")
+    return ""
+
+
+def process_email_attachments(msg, sender_email: str):
+    """Download printable attachments and queue them for printing."""
+    user_id = find_user_by_email(sender_email)
+    if user_id is None:
+        user_id = UNASSIGNED_USER_ID
+
+    # Determine priority from user role
+    if user_id == UNASSIGNED_USER_ID:
+        priority = "3"
+    else:
+        role = get_user_role(user_id)
+        priority = "5" if role == "VIP" else "3"
+
+    body = get_email_text_body(msg)
+    copies, color_mode = parse_email_body(body)
+
+    printed_files = []
+    for part in msg.walk():
+        disposition = str(part.get("Content-Disposition") or "")
+        if "attachment" not in disposition:
+            continue
+        filename = part.get_filename()
+        if not filename:
+            continue
+        # Decode encoded filenames
+        decoded_parts = decode_header(filename)
+        filename = "".join(
+            t[0].decode(t[1] or "utf-8") if isinstance(t[0], bytes) else t[0]
+            for t in decoded_parts
+        )
+        # Only print PDFs and images
+        ext = Path(filename).suffix.lower()
+        if ext not in (".pdf", ".jpg", ".jpeg", ".png"):
+            continue
+
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+
+        local_path = str(PRINT_DIR / f"email_{int(time.time())}_{filename}")
+        with open(local_path, "wb") as f:
+            f.write(payload)
+
+        cmd = [
+            "lp", "-d", PRINTER_NAME,
+            "-n", str(copies),
+            "-o", f"job-priority={priority}",
+            "-o", f"ColorModel={color_mode}",
+            local_path,
+        ]
+        log.info("Email print: %s from %s", filename, sender_email)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            printed_files.append(filename)
+            match = re.search(r"request id is \S+-(\d+)", result.stdout)
+            if match:
+                with tracked_jobs_lock:
+                    tracked_jobs[match.group(1)] = color_mode
+        else:
+            log.error("Email print failed for %s: %s", filename, result.stderr)
+
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+
+    # Notify associated user via Telegram
+    if printed_files and user_id != UNASSIGNED_USER_ID:
+        try:
+            file_list = ", ".join(printed_files)
+            bot.send_message(user_id, MSGS["email_print_notify"].format(
+                files=file_list, copies=copies, mode="Color" if color_mode == "Color" else "B&N"
+            ), parse_mode="Markdown")
+        except Exception as e:
+            log.error("Failed to notify user %d about email print: %s", user_id, e)
+
+
+def email_check_loop():
+    """Background thread: connect to IMAP, fetch unseen emails with attachments, print them."""
+    log.info("Email processing thread started")
+
+    while True:
+        email_wake_event.clear()
+        address, encrypted_pw, timer = get_email_config()
+
+        if not address or not encrypted_pw or timer <= 0:
+            # Disabled — wait indefinitely until woken by config change
+            log.info("Email processing disabled, waiting for config...")
+            email_wake_event.wait()
+            continue
+
+        try:
+            password = decrypt_password(encrypted_pw)
+            mail = imaplib.IMAP4_SSL("imap.gmail.com")
+            mail.login(address, password)
+            mail.select("inbox")
+
+            _, data = mail.search(None, "UNSEEN")
+            mail_ids = data[0].split()
+
+            for mid in mail_ids:
+                _, msg_data = mail.fetch(mid, "(RFC822)")
+                raw = msg_data[0][1]
+                msg = email_lib.message_from_bytes(raw)
+
+                sender = email_lib.utils.parseaddr(msg.get("From", ""))[1].lower()
+                # Only process emails from whitelisted addresses
+                if find_user_by_email(sender) is not None or sender == address:
+                    process_email_attachments(msg, sender)
+                else:
+                    log.info("Email from non-whitelisted sender %s, skipping", sender)
+
+            mail.logout()
+        except Exception as e:
+            log.error("Email check error: %s", e)
+
+        # Sleep until timer expires or config changes
+        email_wake_event.wait(timeout=timer * 60)
 
 
 # --- Command menu helpers ---
@@ -492,6 +730,137 @@ def cmd_menu(message):
     bot.send_message(chat_id, MSGS["menu_title"], reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
 
 
+@bot.message_handler(commands=['email_receptor'])
+def cmd_email_receptor(message):
+    if message.chat.id != ADMIN_ID:
+        return
+
+    args = message.text.strip().split(maxsplit=1)
+    if len(args) < 2:
+        # Show current config
+        address, _, timer = get_email_config()
+        status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
+        bot.reply_to(message, MSGS["email_config_show"].format(
+            status=status, address=address or "(no configurado)",
+            timer=timer
+        ), parse_mode="Markdown")
+        return
+
+    param = args[1].strip()
+    if param.startswith("set-address="):
+        val = param[len("set-address="):]
+        set_email_config("address", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="dirección", value=val))
+    elif param.startswith("set-timer="):
+        val = int(param[len("set-timer="):])
+        set_email_config("timer_minutes", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(
+            field="timer", value=f"{val} min" if val > 0 else "desactivado"
+        ))
+    elif param.startswith("set-password="):
+        val = param[len("set-password="):]
+        encrypted = encrypt_password(val)
+        set_email_config("encrypted_password", encrypted)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="contraseña", value="••••••••"))
+    else:
+        bot.reply_to(message, MSGS["email_config_usage"])
+
+
+@bot.message_handler(commands=['emails'])
+def cmd_emails(message):
+    chat_id = message.chat.id
+    if not get_user_role(chat_id):
+        return
+    emails = get_user_emails(chat_id)
+    if emails:
+        listing = "\n".join(f"• `{e}`" for e in emails)
+        bot.reply_to(message, MSGS["email_list"].format(emails=listing), parse_mode="Markdown")
+    else:
+        bot.reply_to(message, MSGS["email_list_empty"])
+
+
+@bot.message_handler(commands=['emails_admin'])
+def cmd_emails_admin(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    all_emails = get_all_user_emails()
+    if not all_emails:
+        bot.reply_to(message, MSGS["email_admin_empty"])
+        return
+    lines = []
+    for uid, addr in all_emails:
+        if uid == UNASSIGNED_USER_ID:
+            lines.append(f"• `{addr}` → _(sin asignar)_")
+        else:
+            row = db_query("SELECT real_name FROM users WHERE id = ?", (uid,), fetch_one=True)
+            name = row[0] if row else str(uid)
+            lines.append(f"• `{addr}` → {name} (`{uid}`)")
+    bot.reply_to(message, MSGS["email_admin_list"].format(emails="\n".join(lines)), parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['agregar_email'])
+def cmd_add_email(message):
+    chat_id = message.chat.id
+    if not get_user_role(chat_id):
+        return
+
+    args = message.text.strip().split()
+    if len(args) < 2:
+        bot.reply_to(message, MSGS["email_add_usage"])
+        return
+
+    addr = args[1].lower()
+    # Admin can assign to a specific user
+    target_id = chat_id
+    if chat_id == ADMIN_ID and len(args) >= 3:
+        try:
+            target_id = int(args[2])
+        except ValueError:
+            bot.reply_to(message, MSGS["email_add_invalid_id"])
+            return
+
+    if add_user_email(target_id, addr):
+        bot.reply_to(message, MSGS["email_added"].format(email=addr))
+    else:
+        bot.reply_to(message, MSGS["email_already_exists"].format(email=addr))
+
+
+@bot.message_handler(commands=['borrar_email'])
+def cmd_remove_email(message):
+    chat_id = message.chat.id
+    if not get_user_role(chat_id):
+        return
+
+    args = message.text.strip().split()
+    if len(args) < 2:
+        bot.reply_to(message, MSGS["email_remove_usage"])
+        return
+
+    addr = args[1].lower()
+    # Non-admin can only remove own emails
+    if chat_id != ADMIN_ID:
+        if remove_user_email(chat_id, addr):
+            bot.reply_to(message, MSGS["email_removed"].format(email=addr))
+        else:
+            bot.reply_to(message, MSGS["email_not_found"].format(email=addr))
+    else:
+        # Admin can remove any email
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_emails WHERE email = ?", (addr,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                bot.reply_to(message, MSGS["email_removed"].format(email=addr))
+            else:
+                bot.reply_to(message, MSGS["email_not_found"].format(email=addr))
+        finally:
+            conn.close()
+
+
 # --- Text message handlers ---
 
 @bot.message_handler(func=lambda m: m.text and "hola" in m.text.lower(), content_types=['text'])
@@ -713,6 +1082,9 @@ if __name__ == '__main__':
 
     # Start page log watcher in background
     threading.Thread(target=page_log_watcher, daemon=True).start()
+
+    # Start email check loop in background
+    threading.Thread(target=email_check_loop, daemon=True).start()
 
     log.info("Print server bot starting (threads=%d)...", 4)
     bot.infinity_polling()

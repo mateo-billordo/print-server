@@ -9,6 +9,8 @@ A Telegram bot that turns a legacy laptop into a home print server. Authorized f
 - **Silent priority queue** — VIP jobs print before USER jobs via CUPS priority
 - **Ink tracking** — Background watcher counts ALL pages from CUPS logs (bot + network), alerts admin when refill is needed
 - **Nickname system** — Users can set a custom alias via `/apodo`
+- **Role-based command menu** — Commands auto-set per user role via BotCommandScopeChat; `/menu` shows an inline keyboard with quick actions
+- **Email-to-print** — Gmail IMAP reader prints attachments from whitelisted email addresses on a configurable timer
 - **Non-blocking** — Print jobs run in background threads; bot stays responsive for all users
 - **Network sharing** — Printer available via IPP/AirPrint to all LAN devices (2.4GHz, 5GHz, wired)
 
@@ -58,10 +60,13 @@ Create a `.env` file in the project root:
 TELEGRAM_TOKEN=your_bot_token
 ADMIN_ID=your_telegram_chat_id
 PRINTER_NAME=HP-2515
+ENCRYPTION_KEY=your_fernet_key
 CUPS_RUN_PATH=/var/run/cups
 CUPS_LOG_PATH=/var/log/cups
 DATA_PATH=/home/mateo/impresora-server/data
 ```
+
+> Generate the encryption key once: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
 ### CUPS configuration
 
@@ -141,6 +146,10 @@ docker logs -f print_tg_bot
 | `/start` | Register or refresh your profile |
 | `/ayuda` | Show available commands |
 | `/apodo` | Manage your nickname |
+| `/menu` | Quick actions inline keyboard |
+| `/emails` | List your registered email addresses |
+| `/agregar_email <email>` | Register an email for print-by-email |
+| `/borrar_email <email>` | Remove a registered email |
 
 ### Admin only
 
@@ -149,6 +158,12 @@ docker logs -f print_tg_bot
 | `/usuarios` | List all authorized users and roles |
 | `/ink` | Show current page counters (B&W and Color) |
 | `/reset_ink` | Reset counters to zero after refilling cartridges |
+| `/email_receptor` | Show email-to-print configuration |
+| `/email_receptor set-address=<email>` | Set Gmail address for IMAP |
+| `/email_receptor set-password=<app_pw>` | Set Gmail app password (encrypted) |
+| `/email_receptor set-timer=<minutes>` | Set check interval (0 = disabled) |
+| `/emails_admin` | List all registered emails with user associations |
+| `/agregar_email <email> <user_id>` | Assign email to a specific user |
 
 ### Printing via Telegram
 
@@ -162,6 +177,21 @@ Send any PDF or image to the chat. The bot presents an inline menu to configure 
 | Android | Settings → Printing → Default Print Service (or use `ipp://<server_ip>:631/printers/HP-2515`) |
 | Windows | Settings → Printers → Add → `http://<server_ip>:631/printers/HP-2515` |
 | macOS/Linux | Automatic via Bonjour, or add IPP printer manually |
+
+### Printing via email
+
+Send an email with PDF/image attachments to the configured Gmail address from a whitelisted email. The bot checks for new emails on a timer.
+
+**Email body template (optional):**
+
+```
+copias: 3, modo: color
+```
+
+- `copias` — number of copies (default: 1)
+- `modo` — `color` or `bn` (default: bn = black & white)
+
+If the body is blank or unparseable, defaults to 1 copy in B&W.
 
 ## Project Structure
 
@@ -200,6 +230,23 @@ impresora-server/
 | last_alert_color | INTEGER | Alert counter for Color threshold |
 | log_offset | INTEGER | Byte offset in page_log (avoids re-counting) |
 
+**`email_config`** table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER (PK) | Always 1 (single row) |
+| address | TEXT | Gmail address for IMAP |
+| encrypted_password | TEXT | Fernet-encrypted Gmail app password |
+| timer_minutes | INTEGER | Check interval in minutes (0 = disabled) |
+
+**`user_emails`** table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER (PK) | Auto-increment |
+| user_id | INTEGER | Telegram chat_id (or -1 for unassigned) |
+| email | TEXT (UNIQUE) | Whitelisted email address |
+
 ## Ink Alert Logic
 
 - Thresholds: 200 pages each (B&W and Color)
@@ -214,7 +261,7 @@ impresora-server/
 From your development machine:
 
 ```bash
-cd C:\Workspace\Drafts\impresora
+cd C:\personal_workspace\impresora
 git add .
 git commit -m "description"
 git push

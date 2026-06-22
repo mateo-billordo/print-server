@@ -42,5 +42,20 @@
   "menu_help": "❓ Ayuda",
   "menu_users": "👥 Usuarios",
   "menu_ink": "🖨️ Estado Tinta",
-  "menu_reset_ink": "🔄 Reset Tinta"
+  "menu_reset_ink": "🔄 Reset Tinta",
+  "email_config_show": "📧 *Configuración de email:*\n\nEstado: {status}\nDirección: `{address}`\nTimer: cada `{timer}` minutos",
+  "email_config_updated": "✅ Email: {field} actualizado a `{value}`.",
+  "email_config_usage": "⚠️ Uso:\n`/email_receptor set-address=<email>`\n`/email_receptor set-timer=<minutos>`\n`/email_receptor set-password=<app_password>`",
+  "email_list": "📧 *Tus emails registrados:*\n{emails}",
+  "email_list_empty": "📧 No tenés emails registrados. Usá `/agregar_email <email>` para agregar uno.",
+  "email_admin_list": "📧 *Todos los emails registrados:*\n{emails}",
+  "email_admin_empty": "📧 No hay emails registrados en el sistema.",
+  "email_add_usage": "⚠️ Uso: `/agregar_email <email>` o (admin) `/agregar_email <email> <user_id>`",
+  "email_add_invalid_id": "⚠️ El user_id debe ser un número.",
+  "email_added": "✅ Email `{email}` registrado con éxito.",
+  "email_already_exists": "⚠️ El email `{email}` ya está registrado.",
+  "email_remove_usage": "⚠️ Uso: `/borrar_email <email>`",
+  "email_removed": "✅ Email `{email}` eliminado.",
+  "email_not_found": "⚠️ No se encontró el email `{email}` en tus registros.",
+  "email_print_notify": "📧🖨️ *Impresión por email:*\nArchivos: `{files}`\nCopias: {copies} | Modo: {mode}"
 }
