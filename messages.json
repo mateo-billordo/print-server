@@ -3,7 +3,7 @@
   "pending_approval": "🚫 No tenés acceso a esta impresora. Ya le mandé una solicitud al administrador y está pendiente de aprobación.",
   "admin_access_request": "👤 **Petición de Acceso:** `{name}` quiere usar la impresora.\n¿Qué rol le querés asignar?",
   "admin_auth_confirmed": "✅ Autorizaste con éxito a `{name}` con el rol `{role}`.",
-  "user_auth_granted": "🎉 ¡Acceso concedido! {admin} ya te dio acceso a la impresora. Mandale un `/start` para iniciar.",
+  "user_auth_granted": "🎉 ¡Acceso concedido! {admin} ya te dio acceso a la impresora. Tocá *Menú* para comenzar.",
   "nickname_current": "👤 Tu apodo actual es: **{nickname}**\n¿Qué querés hacer?",
   "nickname_empty": "👤 No tenés ningún apodo configurado todavía.\n¿Querés crear uno?",
   "nickname_prompt": "📝 Escribí tu nuevo apodo en el chat:",
@@ -17,10 +17,10 @@
   "cancelled": "❌ Impresión cancelada.",
   "job_expired": "❌ El trabajo expiró o ya fue procesado.",
   "user_list_title": "📋 **Lista de Usuarios Autorizados:**\n\n",
-  "greeting": "¡Hola, {name}! Qué bueno verte por acá. 😊\n\nPodés enviarme directamente el archivo que quieras imprimir o escribir /ayuda para ver los comandos disponibles.",
-  "unknown_command": "⚠️ Comando no reconocido.",
-  "help": "📖 *Guía de comandos disponibles:*\n\n/start - Inicia el bot y actualiza tus datos.\n/ayuda - Muestra este mensaje de soporte.\n/apodo - Cambia o elimina tu apodo personal.\n\n🖨️ *¿Cómo imprimir?*\nSimplemente arrastrá y enviá cualquier documento PDF o imagen al chat.",
-  "help_admin": "📖 *Guía de comandos disponibles:*\n\n/start - Inicia el bot y actualiza tus datos.\n/ayuda - Muestra este mensaje de soporte.\n/apodo - Cambia o elimina tu apodo personal.\n\n🛠️ *Comandos de administrador:*\n/usuarios - Lista los usuarios y sus roles.\n/ink - Estado actual de los contadores de tinta.\n/reset\\_ink - Reinicia los contadores después de recargar tinta.\n\n🖨️ *¿Cómo imprimir?*\nSimplemente arrastrá y enviá cualquier documento PDF o imagen al chat.",
+  "greeting": "¡Hola, {name}! Qué bueno verte por acá. 😊\n\nPodés enviarme directamente el archivo que quieras imprimir, o tocá *Menú* para ver todas las opciones.",
+  "unknown_command": "🤔 No entendí tu mensaje. Usá el botón de *Menú* para ver las opciones disponibles.",
+  "help": "📖 *¿Qué puedo hacer?*\n\n🖨️ *Imprimir* — Enviame un PDF o imagen y te lo imprimo al toque.\n👤 *Apodo* — Personalizá cómo te saludo.\n📧 *Emails* — Registrá emails para imprimir por correo.\n\n💡 Todas las opciones están disponibles desde el botón *Menú*.",
+  "help_admin": "📖 *¿Qué puedo hacer?*\n\n🖨️ *Imprimir* — Enviame un PDF o imagen y te lo imprimo al toque.\n👤 *Apodo* — Personalizá cómo te saludo.\n📧 *Emails* — Registrá emails para imprimir por correo.\n\n🛠️ *Administración:*\n👥 *Usuarios* — Ver, eliminar o cambiar roles.\n🖨️ *Tinta* — Consultar estado y reiniciar contadores.\n⚙️ *Receptor email* — Configurar la casilla de email-to-print.\n\n💡 Todas las opciones están disponibles desde el botón *Menú*.",
   "ink_status": "🖨️ *Estado de tinta:*\n\n⚫ B&N: `{bw}` / `{bw_limit}` páginas\n🟢 Color: `{color}` / `{color_limit}` páginas",
   "ink_reset_success": "✅ Contadores de tinta reiniciados a cero.",
   "ink_alert_bw": "⚠️ *Alerta de tinta B&N:* Ya van `{count}` páginas impresas (límite: {limit}).\nConsiderá recargar el cartucho negro.",
@@ -77,5 +77,7 @@
   "email_remove_usage": "⚠️ Uso: `/borrar_email <email>`",
   "email_removed": "✅ Email `{email}` eliminado.",
   "email_not_found": "⚠️ No se encontró el email `{email}` en tus registros.",
-  "email_print_notify": "📧🖨️ *Impresión por email:*\nArchivos: `{files}`\nCopias: {copies} | Modo: {mode}"
+  "email_print_notify": "📧🖨️ *Impresión por email:*\nArchivos: `{files}`\nCopias: {copies} | Modo: {mode}",
+  "menu_prompt": "✨ ¿Qué más necesitás?",
+  "btn_menu": "📋 Menú"
 }

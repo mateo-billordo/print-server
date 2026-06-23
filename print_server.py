@@ -472,47 +472,21 @@ def email_check_loop():
         email_wake_event.wait(timeout=timer * 60)
 
 
-# --- Command menu helpers ---
+# --- Command cleanup on startup ---
 
-USER_COMMANDS = [
-    types.BotCommand("start", "Iniciar el bot"),
-    types.BotCommand("ayuda", "Ver comandos disponibles"),
-    types.BotCommand("apodo", "Cambiar o eliminar tu apodo"),
-    types.BotCommand("menu", "Menú de acciones rápidas"),
-]
-
-ADMIN_COMMANDS = USER_COMMANDS + [
-    types.BotCommand("usuarios", "Listar usuarios autorizados"),
-    types.BotCommand("ink", "Estado de contadores de tinta"),
-    types.BotCommand("reset_ink", "Reiniciar contadores de tinta"),
-]
-
-
-def refresh_commands_for_user(chat_id: int, role: str):
-    """Set the command menu for a specific user based on their role."""
-    commands = ADMIN_COMMANDS if role == "VIP" and chat_id == ADMIN_ID else USER_COMMANDS
+def clear_all_commands():
+    """Remove any previously registered command menus (default + per-user scopes)."""
     try:
-        bot.set_my_commands(commands, scope=types.BotCommandScopeChat(chat_id))
+        bot.delete_my_commands()
     except Exception as e:
-        log.error("Failed to set commands for user %d: %s", chat_id, e)
+        log.error("Failed to clear default commands: %s", e)
 
-
-def refresh_all_commands():
-    """Set commands for all registered users + admin on startup."""
-    # Default commands for unknown users (just /start)
-    try:
-        bot.set_my_commands([types.BotCommand("start", "Iniciar el bot")])
-    except Exception as e:
-        log.error("Failed to set default commands: %s", e)
-
-    # Admin
-    refresh_commands_for_user(ADMIN_ID, "VIP")
-
-    # All registered users
-    rows = db_query("SELECT id, role FROM users")
-    for uid, role in rows:
-        if uid != ADMIN_ID:
-            refresh_commands_for_user(uid, role)
+    rows = db_query("SELECT id FROM users")
+    for (uid,) in rows:
+        try:
+            bot.delete_my_commands(scope=types.BotCommandScopeChat(uid))
+        except Exception:
+            pass
 
 
 # --- User helpers ---
@@ -566,6 +540,8 @@ def execute_print_job(chat_id: int, job: dict):
 
     if result.returncode == 0:
         bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+        bot.send_message(chat_id, MSGS["menu_prompt"],
+                         reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
         # Register job for the page log watcher to pick up with correct color mode
         match = re.search(r"request id is \S+-(\d+)", result.stdout)
@@ -641,6 +617,13 @@ def build_main_menu(chat_id: int) -> types.InlineKeyboardMarkup:
             types.InlineKeyboardButton(MSGS["menu_users"], callback_data="menu_users_sub"),
             types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_tinta_sub"),
         )
+    return markup
+
+
+def build_single_menu_button() -> types.InlineKeyboardMarkup:
+    """Single 'Menú' button that transforms the message into the full menu when clicked."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(MSGS["btn_menu"], callback_data="menu_back"))
     return markup
 
 
@@ -929,7 +912,8 @@ def handle_greeting(message):
 
     nickname, real_name, _ = get_user_profile(message.chat.id)
     display_name = nickname or real_name or message.from_user.first_name
-    bot.reply_to(message, MSGS["greeting"].format(name=display_name))
+    bot.reply_to(message, MSGS["greeting"].format(name=display_name),
+                 reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
 
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'), content_types=['text'])
@@ -995,7 +979,8 @@ def handle_text(message):
                          reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
         return
 
-    bot.reply_to(message, MSGS["unknown_command"])
+    bot.reply_to(message, MSGS["unknown_command"],
+                 reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
 
 # --- File/photo handler ---
@@ -1056,14 +1041,13 @@ def handle_callback(call):
         target_name = parts[3]
 
         register_user(target_id, target_name, chosen_role)
-        refresh_commands_for_user(target_id, chosen_role)
         bot.edit_message_text(
             MSGS["admin_auth_confirmed"].format(name=target_name, role=chosen_role),
             chat_id, msg_id
         )
         bot.answer_callback_query(call.id)
         bot.send_message(target_id, MSGS["user_auth_granted"].format(admin=call.from_user.first_name),
-                         reply_markup=build_main_menu(target_id))
+                         reply_markup=build_main_menu(target_id), parse_mode="Markdown")
         return
 
     # --- Nickname callbacks ---
@@ -1151,11 +1135,6 @@ def handle_callback(call):
         row = db_query("SELECT real_name FROM users WHERE id = ?", (target_id,), fetch_one=True)
         name = row[0] if row else str(target_id)
         db_query("DELETE FROM users WHERE id = ?", (target_id,), commit=True)
-        # Clear their commands
-        try:
-            bot.delete_my_commands(scope=types.BotCommandScopeChat(target_id))
-        except Exception:
-            pass
         bot.answer_callback_query(call.id)
         bot.edit_message_text(MSGS["user_removed"].format(name=name), chat_id, msg_id,
                              reply_markup=build_users_sub_menu())
@@ -1170,7 +1149,6 @@ def handle_callback(call):
             name, current_role = row
             new_role = "VIP" if current_role == "USER" else "USER"
             db_query("UPDATE users SET role = ? WHERE id = ?", (new_role, target_id), commit=True)
-            refresh_commands_for_user(target_id, new_role)
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
                 MSGS["user_role_changed"].format(name=name, role=new_role), chat_id, msg_id,
@@ -1327,7 +1305,7 @@ def handle_callback(call):
 
 if __name__ == '__main__':
     init_db()
-    refresh_all_commands()
+    clear_all_commands()
 
     # Start page log watcher in background
     threading.Thread(target=page_log_watcher, daemon=True).start()
