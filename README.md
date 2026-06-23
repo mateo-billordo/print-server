@@ -13,7 +13,7 @@ A Telegram bot that turns a legacy laptop into a home print server. Authorized f
   - [CUPS configuration](#cups-configuration)
   - [Deploy](#deploy)
   - [Verify](#verify)
-- [Commands](#commands)
+- [How to Use](#how-to-use)
 - [Printing via Telegram](#printing-via-telegram)
 - [Printing via network](#printing-via-network)
 - [Printing via email](#printing-via-email)
@@ -28,8 +28,8 @@ A Telegram bot that turns a legacy laptop into a home print server. Authorized f
 - **Interactive print menu** — Choose copies, color mode (B&W / Color) before printing
 - **Silent priority queue** — VIP jobs print before USER jobs via CUPS priority
 - **Ink tracking** — Background watcher counts ALL pages from CUPS logs (bot + network), alerts admin when refill is needed
-- **Nickname system** — Users can set a custom alias via `/apodo`
-- **Role-based command menu** — Commands auto-set per user role via BotCommandScopeChat; `/menu` shows an inline keyboard with quick actions
+- **Nickname system** — Users can set a custom alias
+- **Inline menu system** — Role-aware inline keyboard appears after every interaction; no command menu needed
 - **Email-to-print** — Gmail IMAP reader prints attachments from whitelisted email addresses on a configurable timer
 - **Non-blocking** — Print jobs run in background threads; bot stays responsive for all users
 - **Network sharing** — Printer available via IPP/AirPrint to all LAN devices (2.4GHz, 5GHz, wired)
@@ -157,26 +157,26 @@ docker compose up -d
 docker logs -f print_tg_bot
 ```
 
-## Commands
+## How to Use
 
-### All users
+The bot is fully operated via **inline buttons** — no need to type commands. The menu appears automatically after every interaction (printing, greeting, etc.).
+
+1. Open the chat → Telegram sends `/start` automatically
+2. The bot greets you and shows a **Menú** button
+3. Tap **Menú** to access all features (nickname, emails, help, admin tools)
+4. To print: just send a PDF or image — the bot shows copy/color options inline
+
+### Hidden Commands (fallback only)
+
+These still work if typed manually but are not shown in any menu:
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Register or refresh your profile |
-| `/ayuda` | Show available commands |
-| `/apodo` | Manage your nickname |
-| `/menu` | Quick actions inline keyboard |
-
-### Admin only
-
-| Command | Description |
-|---------|-------------|
-| `/usuarios` | List all authorized users and roles |
-| `/ink` | Show current page counters (B&W and Color) |
-| `/reset_ink` | Reset counters to zero after refilling cartridges |
-| `/email_receptor` | Show/configure email-to-print (set-address, set-password, set-timer) |
-| `/emails_admin` | List all registered emails with user associations |
+| `/start` | Re-register or refresh profile |
+| `/menu` | Force-show the inline menu |
+| `/ayuda` | Show help text |
+| `/apodo` | Manage nickname |
+| `/email_receptor` | (Admin) Configure email-to-print |
 
 ### Menu Navigation
 
