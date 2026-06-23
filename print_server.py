@@ -658,6 +658,20 @@ def build_emails_sub_menu(chat_id: int) -> types.InlineKeyboardMarkup:
     return markup
 
 
+def build_email_config_sub_menu() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_ecfg_view"], callback_data="ecfg_view"),
+        types.InlineKeyboardButton(MSGS["sub_ecfg_address"], callback_data="ecfg_address"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_ecfg_password"], callback_data="ecfg_password"),
+        types.InlineKeyboardButton(MSGS["sub_ecfg_timer"], callback_data="ecfg_timer"),
+    )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_emails_sub"))
+    return markup
+
+
 def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -711,43 +725,6 @@ def cmd_menu(message):
     bot.send_message(chat_id, MSGS["menu_title"], reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
 
 
-@bot.message_handler(commands=['email_receptor'])
-def cmd_email_receptor(message):
-    if message.chat.id != ADMIN_ID:
-        return
-
-    args = message.text.strip().split(maxsplit=1)
-    if len(args) < 2:
-        # Show current config
-        address, _, timer = get_email_config()
-        status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
-        bot.reply_to(message, MSGS["email_config_show"].format(
-            status=status, address=address or "(no configurado)",
-            timer=timer
-        ), parse_mode="Markdown")
-        return
-
-    param = args[1].strip()
-    if param.startswith("set-address="):
-        val = param[len("set-address="):]
-        set_email_config("address", val)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(field="dirección", value=val))
-    elif param.startswith("set-timer="):
-        val = int(param[len("set-timer="):])
-        set_email_config("timer_minutes", val)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(
-            field="timer", value=f"{val} min" if val > 0 else "desactivado"
-        ))
-    elif param.startswith("set-password="):
-        val = param[len("set-password="):]
-        encrypted = encrypt_password(val)
-        set_email_config("encrypted_password", encrypted)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(field="contraseña", value="••••••••"))
-    else:
-        bot.reply_to(message, MSGS["email_config_usage"])
 
 
 # --- Text message handlers ---
@@ -824,6 +801,36 @@ def handle_text(message):
         else:
             bot.reply_to(message, MSGS["email_not_found"].format(email=addr),
                          reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
+        return
+
+    if state == "waiting_ecfg_address":
+        val = message.text.strip()
+        set_email_config("address", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="dirección", value=val),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    if state == "waiting_ecfg_password":
+        val = message.text.strip()
+        encrypted = encrypt_password(val)
+        set_email_config("encrypted_password", encrypted)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="contraseña", value="••••••••"),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    if state == "waiting_ecfg_timer":
+        try:
+            val = int(message.text.strip())
+        except ValueError:
+            bot.reply_to(message, "⚠️ Ingresá un número válido.")
+            return
+        set_email_config("timer_minutes", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(
+            field="timer", value=f"{val} min" if val > 0 else "desactivado"),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
         return
 
     bot.reply_to(message, MSGS["unknown_command"],
@@ -1059,12 +1066,45 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_ecfg_title"], chat_id, msg_id,
+                             reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    # --- Email config sub-menu ---
+    if call.data == "ecfg_view":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
         address, _, timer = get_email_config()
         status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
         bot.edit_message_text(
             MSGS["email_config_show"].format(status=status, address=address or "(no configurado)", timer=timer),
-            chat_id, msg_id, reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown"
+            chat_id, msg_id, reply_markup=build_email_config_sub_menu(), parse_mode="Markdown"
         )
+        return
+
+    if call.data == "ecfg_address":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_address"
+        bot.edit_message_text(MSGS["ecfg_prompt_address"], chat_id, msg_id)
+        return
+
+    if call.data == "ecfg_password":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_password"
+        bot.edit_message_text(MSGS["ecfg_prompt_password"], chat_id, msg_id)
+        return
+
+    if call.data == "ecfg_timer":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_timer"
+        bot.edit_message_text(MSGS["ecfg_prompt_timer"], chat_id, msg_id)
         return
 
     # --- Tinta sub-menu ---

@@ -79,5 +79,13 @@
   "email_not_found": "⚠️ No se encontró el email `{email}` en tus registros.",
   "email_print_notify": "📧🖨️ *Impresión por email:*\nArchivos: `{files}`\nCopias: {copies} | Modo: {mode}",
   "menu_prompt": "✨ ¿Qué más necesitás?",
-  "btn_menu": "📋 Menú"
+  "btn_menu": "📋 Menú",
+  "sub_ecfg_title": "⚙️ *Configuración del receptor de email*\nSeleccioná una opción:",
+  "sub_ecfg_view": "📊 Ver estado",
+  "sub_ecfg_address": "📧 Cambiar dirección",
+  "sub_ecfg_password": "🔑 Cambiar contraseña",
+  "sub_ecfg_timer": "⏱️ Cambiar timer",
+  "ecfg_prompt_address": "📝 Escribí la dirección de Gmail para recibir emails:",
+  "ecfg_prompt_password": "🔑 Escribí el app password de Gmail:",
+  "ecfg_prompt_timer": "⏱️ Escribí el intervalo en minutos (0 = desactivado):"
 }
