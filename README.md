@@ -174,9 +174,6 @@ These still work if typed manually but are not shown in any menu:
 |---------|-------------|
 | `/start` | Re-register or refresh profile |
 | `/menu` | Force-show the inline menu |
-| `/ayuda` | Show help text |
-| `/apodo` | Manage nickname |
-| `/email_receptor` | (Admin) Configure email-to-print |
 
 ### Menu Navigation
 
