@@ -472,47 +472,21 @@ def email_check_loop():
         email_wake_event.wait(timeout=timer * 60)
 
 
-# --- Command menu helpers ---
+# --- Command cleanup on startup ---
 
-USER_COMMANDS = [
-    types.BotCommand("start", "Iniciar el bot"),
-    types.BotCommand("ayuda", "Ver comandos disponibles"),
-    types.BotCommand("apodo", "Cambiar o eliminar tu apodo"),
-    types.BotCommand("menu", "Menú de acciones rápidas"),
-]
-
-ADMIN_COMMANDS = USER_COMMANDS + [
-    types.BotCommand("usuarios", "Listar usuarios autorizados"),
-    types.BotCommand("ink", "Estado de contadores de tinta"),
-    types.BotCommand("reset_ink", "Reiniciar contadores de tinta"),
-]
-
-
-def refresh_commands_for_user(chat_id: int, role: str):
-    """Set the command menu for a specific user based on their role."""
-    commands = ADMIN_COMMANDS if role == "VIP" and chat_id == ADMIN_ID else USER_COMMANDS
+def clear_all_commands():
+    """Remove any previously registered command menus (default + per-user scopes)."""
     try:
-        bot.set_my_commands(commands, scope=types.BotCommandScopeChat(chat_id))
+        bot.delete_my_commands()
     except Exception as e:
-        log.error("Failed to set commands for user %d: %s", chat_id, e)
+        log.error("Failed to clear default commands: %s", e)
 
-
-def refresh_all_commands():
-    """Set commands for all registered users + admin on startup."""
-    # Default commands for unknown users (just /start)
-    try:
-        bot.set_my_commands([types.BotCommand("start", "Iniciar el bot")])
-    except Exception as e:
-        log.error("Failed to set default commands: %s", e)
-
-    # Admin
-    refresh_commands_for_user(ADMIN_ID, "VIP")
-
-    # All registered users
-    rows = db_query("SELECT id, role FROM users")
-    for uid, role in rows:
-        if uid != ADMIN_ID:
-            refresh_commands_for_user(uid, role)
+    rows = db_query("SELECT id FROM users")
+    for (uid,) in rows:
+        try:
+            bot.delete_my_commands(scope=types.BotCommandScopeChat(uid))
+        except Exception:
+            pass
 
 
 # --- User helpers ---
@@ -566,6 +540,8 @@ def execute_print_job(chat_id: int, job: dict):
 
     if result.returncode == 0:
         bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+        bot.send_message(chat_id, MSGS["menu_prompt"],
+                         reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
         # Register job for the page log watcher to pick up with correct color mode
         match = re.search(r"request id is \S+-(\d+)", result.stdout)
@@ -644,6 +620,13 @@ def build_main_menu(chat_id: int) -> types.InlineKeyboardMarkup:
     return markup
 
 
+def build_single_menu_button() -> types.InlineKeyboardMarkup:
+    """Single 'Menú' button that transforms the message into the full menu when clicked."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(MSGS["btn_menu"], callback_data="menu_back"))
+    return markup
+
+
 def build_users_sub_menu() -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -672,6 +655,20 @@ def build_emails_sub_menu(chat_id: int) -> types.InlineKeyboardMarkup:
             types.InlineKeyboardButton(MSGS["sub_emails_config"], callback_data="esub_config"),
         )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+    return markup
+
+
+def build_email_config_sub_menu() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_ecfg_view"], callback_data="ecfg_view"),
+        types.InlineKeyboardButton(MSGS["sub_ecfg_address"], callback_data="ecfg_address"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_ecfg_password"], callback_data="ecfg_password"),
+        types.InlineKeyboardButton(MSGS["sub_ecfg_timer"], callback_data="ecfg_timer"),
+    )
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_emails_sub"))
     return markup
 
 
@@ -720,67 +717,6 @@ def cmd_start(message):
     bot.reply_to(message, MSGS["welcome"].format(name=tg_name), reply_markup=build_main_menu(chat_id))
 
 
-@bot.message_handler(commands=['ayuda'])
-def cmd_help(message):
-    chat_id = message.chat.id
-    if not get_user_role(chat_id):
-        return
-    if chat_id == ADMIN_ID:
-        bot.reply_to(message, MSGS["help_admin"], parse_mode='Markdown')
-    else:
-        bot.reply_to(message, MSGS["help"], parse_mode='Markdown')
-
-
-@bot.message_handler(commands=['usuarios'])
-def cmd_list_users(message):
-    if message.chat.id != ADMIN_ID:
-        return
-
-    rows = db_query("SELECT id, real_name, nickname, role FROM users")
-    response = MSGS["user_list_title"]
-    for uid, name, nick, role in rows:
-        nick_display = f" ({nick})" if nick else ""
-        response += f"• **ID:** `{uid}` | **Nombre:** {name}{nick_display} | **Rol:** `{role}`\n"
-
-    bot.send_message(message.chat.id, response, parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['reset_ink'])
-def cmd_reset_ink(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    reset_ink_counters()
-    bot.reply_to(message, MSGS["ink_reset_success"])
-
-
-@bot.message_handler(commands=['ink'])
-def cmd_ink_status(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    bw, color = get_ink_counters()
-    bot.reply_to(
-        message,
-        MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
-        parse_mode="Markdown",
-    )
-
-
-@bot.message_handler(commands=['apodo'])
-def cmd_nickname(message):
-    if not get_user_role(message.chat.id):
-        return
-
-    nickname, _, _ = get_user_profile(message.chat.id)
-    if nickname:
-        text = MSGS["nickname_current"].format(nickname=nickname)
-        markup = build_nickname_menu(has_nickname=True)
-    else:
-        text = MSGS["nickname_empty"]
-        markup = build_nickname_menu(has_nickname=False)
-
-    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
-
-
 @bot.message_handler(commands=['menu'])
 def cmd_menu(message):
     chat_id = message.chat.id
@@ -789,135 +725,6 @@ def cmd_menu(message):
     bot.send_message(chat_id, MSGS["menu_title"], reply_markup=build_main_menu(chat_id), parse_mode="Markdown")
 
 
-@bot.message_handler(commands=['email_receptor'])
-def cmd_email_receptor(message):
-    if message.chat.id != ADMIN_ID:
-        return
-
-    args = message.text.strip().split(maxsplit=1)
-    if len(args) < 2:
-        # Show current config
-        address, _, timer = get_email_config()
-        status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
-        bot.reply_to(message, MSGS["email_config_show"].format(
-            status=status, address=address or "(no configurado)",
-            timer=timer
-        ), parse_mode="Markdown")
-        return
-
-    param = args[1].strip()
-    if param.startswith("set-address="):
-        val = param[len("set-address="):]
-        set_email_config("address", val)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(field="dirección", value=val))
-    elif param.startswith("set-timer="):
-        val = int(param[len("set-timer="):])
-        set_email_config("timer_minutes", val)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(
-            field="timer", value=f"{val} min" if val > 0 else "desactivado"
-        ))
-    elif param.startswith("set-password="):
-        val = param[len("set-password="):]
-        encrypted = encrypt_password(val)
-        set_email_config("encrypted_password", encrypted)
-        email_wake_event.set()
-        bot.reply_to(message, MSGS["email_config_updated"].format(field="contraseña", value="••••••••"))
-    else:
-        bot.reply_to(message, MSGS["email_config_usage"])
-
-
-@bot.message_handler(commands=['emails'])
-def cmd_emails(message):
-    chat_id = message.chat.id
-    if not get_user_role(chat_id):
-        return
-    emails = get_user_emails(chat_id)
-    if emails:
-        listing = "\n".join(f"• `{e}`" for e in emails)
-        bot.reply_to(message, MSGS["email_list"].format(emails=listing), parse_mode="Markdown")
-    else:
-        bot.reply_to(message, MSGS["email_list_empty"])
-
-
-@bot.message_handler(commands=['emails_admin'])
-def cmd_emails_admin(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    all_emails = get_all_user_emails()
-    if not all_emails:
-        bot.reply_to(message, MSGS["email_admin_empty"])
-        return
-    lines = []
-    for uid, addr in all_emails:
-        if uid == UNASSIGNED_USER_ID:
-            lines.append(f"• `{addr}` → _(sin asignar)_")
-        else:
-            row = db_query("SELECT real_name FROM users WHERE id = ?", (uid,), fetch_one=True)
-            name = row[0] if row else str(uid)
-            lines.append(f"• `{addr}` → {name} (`{uid}`)")
-    bot.reply_to(message, MSGS["email_admin_list"].format(emails="\n".join(lines)), parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['agregar_email'])
-def cmd_add_email(message):
-    chat_id = message.chat.id
-    if not get_user_role(chat_id):
-        return
-
-    args = message.text.strip().split()
-    if len(args) < 2:
-        bot.reply_to(message, MSGS["email_add_usage"])
-        return
-
-    addr = args[1].lower()
-    # Admin can assign to a specific user
-    target_id = chat_id
-    if chat_id == ADMIN_ID and len(args) >= 3:
-        try:
-            target_id = int(args[2])
-        except ValueError:
-            bot.reply_to(message, MSGS["email_add_invalid_id"])
-            return
-
-    if add_user_email(target_id, addr):
-        bot.reply_to(message, MSGS["email_added"].format(email=addr))
-    else:
-        bot.reply_to(message, MSGS["email_already_exists"].format(email=addr))
-
-
-@bot.message_handler(commands=['borrar_email'])
-def cmd_remove_email(message):
-    chat_id = message.chat.id
-    if not get_user_role(chat_id):
-        return
-
-    args = message.text.strip().split()
-    if len(args) < 2:
-        bot.reply_to(message, MSGS["email_remove_usage"])
-        return
-
-    addr = args[1].lower()
-    # Non-admin can only remove own emails
-    if chat_id != ADMIN_ID:
-        if remove_user_email(chat_id, addr):
-            bot.reply_to(message, MSGS["email_removed"].format(email=addr))
-        else:
-            bot.reply_to(message, MSGS["email_not_found"].format(email=addr))
-    else:
-        # Admin can remove any email
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_emails WHERE email = ?", (addr,))
-            conn.commit()
-            if cursor.rowcount > 0:
-                bot.reply_to(message, MSGS["email_removed"].format(email=addr))
-            else:
-                bot.reply_to(message, MSGS["email_not_found"].format(email=addr))
-        finally:
-            conn.close()
 
 
 # --- Text message handlers ---
@@ -929,7 +736,8 @@ def handle_greeting(message):
 
     nickname, real_name, _ = get_user_profile(message.chat.id)
     display_name = nickname or real_name or message.from_user.first_name
-    bot.reply_to(message, MSGS["greeting"].format(name=display_name))
+    bot.reply_to(message, MSGS["greeting"].format(name=display_name),
+                 reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
 
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'), content_types=['text'])
@@ -995,7 +803,38 @@ def handle_text(message):
                          reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown")
         return
 
-    bot.reply_to(message, MSGS["unknown_command"])
+    if state == "waiting_ecfg_address":
+        val = message.text.strip()
+        set_email_config("address", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="dirección", value=val),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    if state == "waiting_ecfg_password":
+        val = message.text.strip()
+        encrypted = encrypt_password(val)
+        set_email_config("encrypted_password", encrypted)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(field="contraseña", value="••••••••"),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    if state == "waiting_ecfg_timer":
+        try:
+            val = int(message.text.strip())
+        except ValueError:
+            bot.reply_to(message, "⚠️ Ingresá un número válido.")
+            return
+        set_email_config("timer_minutes", val)
+        email_wake_event.set()
+        bot.reply_to(message, MSGS["email_config_updated"].format(
+            field="timer", value=f"{val} min" if val > 0 else "desactivado"),
+                     reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    bot.reply_to(message, MSGS["unknown_command"],
+                 reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
 
 # --- File/photo handler ---
@@ -1056,14 +895,13 @@ def handle_callback(call):
         target_name = parts[3]
 
         register_user(target_id, target_name, chosen_role)
-        refresh_commands_for_user(target_id, chosen_role)
         bot.edit_message_text(
             MSGS["admin_auth_confirmed"].format(name=target_name, role=chosen_role),
             chat_id, msg_id
         )
         bot.answer_callback_query(call.id)
         bot.send_message(target_id, MSGS["user_auth_granted"].format(admin=call.from_user.first_name),
-                         reply_markup=build_main_menu(target_id))
+                         reply_markup=build_main_menu(target_id), parse_mode="Markdown")
         return
 
     # --- Nickname callbacks ---
@@ -1151,11 +989,6 @@ def handle_callback(call):
         row = db_query("SELECT real_name FROM users WHERE id = ?", (target_id,), fetch_one=True)
         name = row[0] if row else str(target_id)
         db_query("DELETE FROM users WHERE id = ?", (target_id,), commit=True)
-        # Clear their commands
-        try:
-            bot.delete_my_commands(scope=types.BotCommandScopeChat(target_id))
-        except Exception:
-            pass
         bot.answer_callback_query(call.id)
         bot.edit_message_text(MSGS["user_removed"].format(name=name), chat_id, msg_id,
                              reply_markup=build_users_sub_menu())
@@ -1170,7 +1003,6 @@ def handle_callback(call):
             name, current_role = row
             new_role = "VIP" if current_role == "USER" else "USER"
             db_query("UPDATE users SET role = ? WHERE id = ?", (new_role, target_id), commit=True)
-            refresh_commands_for_user(target_id, new_role)
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
                 MSGS["user_role_changed"].format(name=name, role=new_role), chat_id, msg_id,
@@ -1234,12 +1066,45 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
+        bot.edit_message_text(MSGS["sub_ecfg_title"], chat_id, msg_id,
+                             reply_markup=build_email_config_sub_menu(), parse_mode="Markdown")
+        return
+
+    # --- Email config sub-menu ---
+    if call.data == "ecfg_view":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
         address, _, timer = get_email_config()
         status = "✅ Activo" if address and timer > 0 else "❌ Inactivo"
         bot.edit_message_text(
             MSGS["email_config_show"].format(status=status, address=address or "(no configurado)", timer=timer),
-            chat_id, msg_id, reply_markup=build_emails_sub_menu(chat_id), parse_mode="Markdown"
+            chat_id, msg_id, reply_markup=build_email_config_sub_menu(), parse_mode="Markdown"
         )
+        return
+
+    if call.data == "ecfg_address":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_address"
+        bot.edit_message_text(MSGS["ecfg_prompt_address"], chat_id, msg_id)
+        return
+
+    if call.data == "ecfg_password":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_password"
+        bot.edit_message_text(MSGS["ecfg_prompt_password"], chat_id, msg_id)
+        return
+
+    if call.data == "ecfg_timer":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        user_state[chat_id] = "waiting_ecfg_timer"
+        bot.edit_message_text(MSGS["ecfg_prompt_timer"], chat_id, msg_id)
         return
 
     # --- Tinta sub-menu ---
@@ -1327,7 +1192,7 @@ def handle_callback(call):
 
 if __name__ == '__main__':
     init_db()
-    refresh_all_commands()
+    clear_all_commands()
 
     # Start page log watcher in background
     threading.Thread(target=page_log_watcher, daemon=True).start()
