@@ -424,7 +424,7 @@ def process_email_attachments(msg, sender_email: str):
             try:
                 os.remove(print_path)
             except OSError:
-            pass
+                pass
 
     # Notify associated user via Telegram
     if printed_files and user_id != UNASSIGNED_USER_ID:
