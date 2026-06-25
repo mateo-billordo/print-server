@@ -14,6 +14,8 @@ from telebot import TeleBot, types
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
+import img2pdf
+
 # --- Configuration ---
 
 load_dotenv()
@@ -394,12 +396,13 @@ def process_email_attachments(msg, sender_email: str):
         with open(local_path, "wb") as f:
             f.write(payload)
 
+        print_path = convert_image_to_pdf(local_path) or local_path
         cmd = [
             "lp", "-d", PRINTER_NAME,
             "-n", str(copies),
             "-o", f"job-priority={priority}",
             "-o", f"ColorModel={color_mode}",
-            local_path,
+            print_path,
         ]
         log.info("Email print: %s from %s", filename, sender_email)
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -416,6 +419,11 @@ def process_email_attachments(msg, sender_email: str):
         try:
             os.remove(local_path)
         except OSError:
+            pass
+        if print_path != local_path:
+            try:
+                os.remove(print_path)
+            except OSError:
             pass
 
     # Notify associated user via Telegram
@@ -524,16 +532,28 @@ def register_user(chat_id: int, real_name: str, role: str):
     )
 
 
+def convert_image_to_pdf(file_path: str) -> str | None:
+    """Convert image to PDF for reliable printing. Returns PDF path or None if not an image."""
+    ext = Path(file_path).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png"):
+        return None
+    pdf_path = file_path + ".pdf"
+    with open(pdf_path, "wb") as f:
+        f.write(img2pdf.convert(file_path))
+    return pdf_path
+
+
 # --- Print execution (runs in dedicated thread) ---
 
 def execute_print_job(chat_id: int, job: dict):
     """Executes lp command in a background thread."""
+    print_path = convert_image_to_pdf(job["file_path"]) or job["file_path"]
     cmd = [
         "lp", "-d", PRINTER_NAME,
         "-n", str(job["copies"]),
         "-o", f"job-priority={job['priority']}",
         "-o", f"ColorModel={job['color']}",
-        job["file_path"],
+        print_path,
     ]
     log.info("Printing for user %d: %s", chat_id, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -553,6 +573,13 @@ def execute_print_job(chat_id: int, job: dict):
     else:
         log.error("lp failed for user %d: %s", chat_id, result.stderr)
         bot.send_message(chat_id, MSGS["print_error"])
+
+    # Cleanup converted PDF if any
+    if print_path != job["file_path"]:
+        try:
+            os.remove(print_path)
+        except OSError:
+            pass
 
 
 # --- Inline keyboard builders ---
