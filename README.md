@@ -239,11 +239,20 @@ impresora-server/
 ├── messages.json         # UI strings (Spanish)
 ├── Dockerfile
 ├── docker-compose.yml
+├── deploy.sh             # Redeploy script (run on server)
+├── server-setup/         # Host setup scripts (see server-setup/README.md)
+│   ├── README.md
+│   ├── setup-cups.sh     # Initial CUPS installation & config
+│   └── fix-imagetoraster.sh  # Fix for broken image filter
 ├── .env                  # Secrets (git-ignored)
 ├── .gitignore
 └── data/                 # Persistent volume (git-ignored)
     └── impresora_usuarios.db
 ```
+
+### Server Setup
+
+See [`server-setup/README.md`](server-setup/README.md) for host-level configuration scripts (CUPS installation, network sharing, image filter fix).
 
 ## Database Schema
 

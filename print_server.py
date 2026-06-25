@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
 import img2pdf
+from PIL import Image
 
 # --- Configuration ---
 
@@ -396,7 +397,7 @@ def process_email_attachments(msg, sender_email: str):
         with open(local_path, "wb") as f:
             f.write(payload)
 
-        print_path = convert_image_to_pdf(local_path) or local_path
+        print_path = convert_image_to_pdf(local_path, grayscale=(color_mode == "Gray")) or local_path
         cmd = [
             "lp", "-d", PRINTER_NAME,
             "-n", str(copies),
@@ -532,22 +533,49 @@ def register_user(chat_id: int, real_name: str, role: str):
     )
 
 
-def convert_image_to_pdf(file_path: str) -> str | None:
+def convert_image_to_pdf(file_path: str, grayscale: bool = False) -> str | None:
     """Convert image to PDF for reliable printing. Returns PDF path or None if not an image."""
     ext = Path(file_path).suffix.lower()
     if ext not in (".jpg", ".jpeg", ".png"):
         return None
+    src = file_path
+    if grayscale:
+        src = file_path + ".gray.jpg"
+        Image.open(file_path).convert("L").save(src)
     pdf_path = file_path + ".pdf"
     with open(pdf_path, "wb") as f:
-        f.write(img2pdf.convert(file_path))
+        f.write(img2pdf.convert(src))
+    if grayscale:
+        os.remove(src)
     return pdf_path
 
 
 # --- Print execution (runs in dedicated thread) ---
 
+JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
+JOB_POLL_TIMEOUT = 120  # max seconds to wait for a job to complete
+
+
+def poll_job_completion(job_id: str) -> str:
+    """Poll lpstat until job completes. Returns 'completed', 'error', or 'timeout'."""
+    full_id = f"{PRINTER_NAME}-{job_id}"
+    elapsed = 0
+    while elapsed < JOB_POLL_TIMEOUT:
+        time.sleep(JOB_POLL_INTERVAL)
+        elapsed += JOB_POLL_INTERVAL
+        result = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
+        if full_id not in result.stdout:
+            # Job left the active queue — check if printer got disabled (error)
+            status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
+            if "disabled" in status.stdout.lower():
+                return "error"
+            return "completed"
+    return "timeout"
+
+
 def execute_print_job(chat_id: int, job: dict):
-    """Executes lp command in a background thread."""
-    print_path = convert_image_to_pdf(job["file_path"]) or job["file_path"]
+    """Executes lp command in a background thread, polls for completion."""
+    print_path = convert_image_to_pdf(job["file_path"], grayscale=(job["color"] == "Gray")) or job["file_path"]
     cmd = [
         "lp", "-d", PRINTER_NAME,
         "-n", str(job["copies"]),
@@ -558,21 +586,41 @@ def execute_print_job(chat_id: int, job: dict):
     log.info("Printing for user %d: %s", chat_id, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    if result.returncode == 0:
-        bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
-        bot.send_message(chat_id, MSGS["menu_prompt"],
-                         reply_markup=build_single_menu_button(), parse_mode="Markdown")
-
-        # Register job for the page log watcher to pick up with correct color mode
-        match = re.search(r"request id is \S+-(\d+)", result.stdout)
-        if match:
-            job_id = match.group(1)
-            with tracked_jobs_lock:
-                tracked_jobs[job_id] = job["color"]
-            log.info("Registered job %s as %s", job_id, job["color"])
-    else:
+    if result.returncode != 0:
         log.error("lp failed for user %d: %s", chat_id, result.stderr)
         bot.send_message(chat_id, MSGS["print_error"])
+        if print_path != job["file_path"]:
+            try:
+                os.remove(print_path)
+            except OSError:
+                pass
+        return
+
+    # Register job for ink tracking
+    match = re.search(r"request id is \S+-(\d+)", result.stdout)
+    job_id = match.group(1) if match else None
+    if job_id:
+        with tracked_jobs_lock:
+            tracked_jobs[job_id] = job["color"]
+        log.info("Registered job %s as %s", job_id, job["color"])
+
+    bot.send_message(chat_id, MSGS["print_queued"].format(file=job["file_name"]), parse_mode="Markdown")
+
+    # Poll for actual completion
+    if job_id:
+        status = poll_job_completion(job_id)
+        if status == "completed":
+            bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+            bot.send_message(chat_id, MSGS["menu_prompt"],
+                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
+        elif status == "error":
+            bot.send_message(chat_id, MSGS["print_failed"].format(file=job["file_name"]), parse_mode="Markdown")
+            bot.send_message(chat_id, MSGS["menu_prompt"],
+                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, MSGS["print_timeout"].format(file=job["file_name"]), parse_mode="Markdown")
+            bot.send_message(chat_id, MSGS["menu_prompt"],
+                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
     # Cleanup converted PDF if any
     if print_path != job["file_path"]:

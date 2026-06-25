@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir pyTelegramBotAPI python-dotenv requests cryptography img2pdf
+RUN pip install --no-cache-dir pyTelegramBotAPI python-dotenv requests cryptography img2pdf Pillow
 
 COPY print_server.py messages.json ./
 
