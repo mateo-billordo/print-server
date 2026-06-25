@@ -678,6 +678,9 @@ def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
         types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
     )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_tinta_testpage"], callback_data="tsub_testpage"),
+    )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
     return markup
 
@@ -1134,6 +1137,23 @@ def handle_callback(call):
         reset_ink_counters()
         bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id,
                              reply_markup=build_tinta_sub_menu())
+        return
+
+    if call.data == "tsub_testpage":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        result = subprocess.run(
+            ["lp", "-d", PRINTER_NAME, "/usr/share/cups/data/testprint"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            bot.edit_message_text(MSGS["testpage_sent"], chat_id, msg_id,
+                                 reply_markup=build_tinta_sub_menu())
+        else:
+            log.error("Test page failed: %s", result.stderr)
+            bot.edit_message_text(MSGS["testpage_error"], chat_id, msg_id,
+                                 reply_markup=build_tinta_sub_menu())
         return
 
     # --- Print job callbacks ---
