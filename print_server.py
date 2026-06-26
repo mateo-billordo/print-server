@@ -606,8 +606,7 @@ def convert_image_to_pdf(file_path: str, grayscale: bool = False) -> str | None:
 # --- Print execution (runs in dedicated thread) ---
 
 JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
-JOB_POLL_TIMEOUT = 120  # max seconds to wait for a job to complete
-JOB_STALL_THRESHOLD = 20  # seconds before checking for stall/paper issues
+JOB_POLL_TIMEOUT = 60  # max seconds to wait for a job to complete
 
 
 # Tracks jobs canceled by admin wipe — poll_job_completion checks this
@@ -656,28 +655,7 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
         if full_id not in result.stdout:
             return ("completed", "")
 
-        # After stall threshold, check for extended state messages (paper out, etc.)
-        # With error-policy=retry-current-job, CUPS retries without disabling
-        if elapsed >= JOB_STALL_THRESHOLD:
-            stall_reason = detect_printer_stall()
-            if stall_reason:
-                return ("error", stall_reason)
-
     return ("timeout", "")
-
-
-def detect_printer_stall() -> str | None:
-    """Check lpstat -l for extended state messages indicating paper/hardware issues.
-    Returns reason string or None if printer seems fine."""
-    result = subprocess.run(["lpstat", "-l", "-p", PRINTER_NAME], capture_output=True, text=True)
-    if not result.stdout:
-        return None
-    lines = result.stdout.strip().splitlines()
-    # Extended state messages are indented lines after the printer status line
-    state_messages = [l.strip() for l in lines[1:] if l.startswith(("\t", "    ")) and l.strip()]
-    if state_messages:
-        return "; ".join(state_messages)
-    return None
 
 
 def get_printer_status() -> str:
