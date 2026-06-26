@@ -914,7 +914,6 @@ def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
     )
     markup.add(
         types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
-        types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
     )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
     return markup
@@ -1359,9 +1358,12 @@ def handle_callback(call):
             return
         bot.answer_callback_query(call.id)
         bw, color = get_ink_counters()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"))
+        markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_tinta_sub"))
         bot.edit_message_text(
             MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
-            chat_id, msg_id, reply_markup=build_tinta_sub_menu(), parse_mode="Markdown"
+            chat_id, msg_id, reply_markup=markup, parse_mode="Markdown"
         )
         return
 
