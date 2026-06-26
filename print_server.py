@@ -607,6 +607,7 @@ def convert_image_to_pdf(file_path: str, grayscale: bool = False) -> str | None:
 
 JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
 JOB_POLL_TIMEOUT = 120  # max seconds to wait for a job to complete
+JOB_STALL_THRESHOLD = 20  # seconds before checking for stall/paper issues
 
 
 # Tracks jobs canceled by admin wipe — poll_job_completion checks this
@@ -644,7 +645,7 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
                 _wiped_jobs.discard(job_id)
                 return ("canceled", "")
 
-        # Check printer state (detects paper jam even while job is still queued)
+        # Check printer state (detects errors even while job is still queued)
         printer_status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
         if "disabled" in printer_status.stdout.lower() or "stopped" in printer_status.stdout.lower():
             reason = extract_printer_reason(printer_status.stdout)
@@ -655,7 +656,28 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
         if full_id not in result.stdout:
             return ("completed", "")
 
+        # After stall threshold, check for extended state messages (paper out, etc.)
+        # With error-policy=retry-current-job, CUPS retries without disabling
+        if elapsed >= JOB_STALL_THRESHOLD:
+            stall_reason = detect_printer_stall()
+            if stall_reason:
+                return ("error", stall_reason)
+
     return ("timeout", "")
+
+
+def detect_printer_stall() -> str | None:
+    """Check lpstat -l for extended state messages indicating paper/hardware issues.
+    Returns reason string or None if printer seems fine."""
+    result = subprocess.run(["lpstat", "-l", "-p", PRINTER_NAME], capture_output=True, text=True)
+    if not result.stdout:
+        return None
+    lines = result.stdout.strip().splitlines()
+    # Extended state messages are indented lines after the printer status line
+    state_messages = [l.strip() for l in lines[1:] if l.startswith(("\t", "    ")) and l.strip()]
+    if state_messages:
+        return "; ".join(state_messages)
+    return None
 
 
 def get_printer_status() -> str:
@@ -935,6 +957,13 @@ def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
     )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
+    return markup
+
+
+def build_tinta_back_button() -> types.InlineKeyboardMarkup:
+    """Single back button returning to the Monitorear sub-menu."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_tinta_sub"))
     return markup
 
 
@@ -1392,7 +1421,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         reset_ink_counters()
         bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id,
-                             reply_markup=build_tinta_sub_menu())
+                             reply_markup=build_tinta_back_button())
         return
 
     if call.data == "tsub_testpage":
@@ -1405,11 +1434,11 @@ def handle_callback(call):
         )
         if result.returncode == 0:
             bot.edit_message_text(MSGS["testpage_sent"], chat_id, msg_id,
-                                 reply_markup=build_tinta_sub_menu())
+                                 reply_markup=build_tinta_back_button())
         else:
             log.error("Test page failed: %s", result.stderr)
             bot.edit_message_text(MSGS["testpage_error"], chat_id, msg_id,
-                                 reply_markup=build_tinta_sub_menu())
+                                 reply_markup=build_tinta_back_button())
         return
 
     if call.data == "tsub_monitor":
@@ -1418,7 +1447,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         status_text = get_printer_status()
         bot.edit_message_text(status_text, chat_id, msg_id,
-                             reply_markup=build_tinta_sub_menu(), parse_mode="Markdown")
+                             reply_markup=build_tinta_back_button(), parse_mode="Markdown")
         return
 
     if call.data == "tsub_reactivar":
@@ -1428,11 +1457,11 @@ def handle_callback(call):
         result = reactivate_printer()
         if result == "ok":
             bot.edit_message_text(MSGS["printer_reactivated"], chat_id, msg_id,
-                                 reply_markup=build_tinta_sub_menu())
+                                 reply_markup=build_tinta_back_button())
         else:
             bot.edit_message_text(
                 MSGS["printer_reactivate_error"].format(error=result),
-                chat_id, msg_id, reply_markup=build_tinta_sub_menu()
+                chat_id, msg_id, reply_markup=build_tinta_back_button()
             )
         return
 
@@ -1453,7 +1482,7 @@ def handle_callback(call):
                         _wiped_jobs.add(job_num)
         subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
         bot.edit_message_text(MSGS["queue_wiped"], chat_id, msg_id,
-                             reply_markup=build_tinta_sub_menu())
+                             reply_markup=build_tinta_back_button())
         return
 
     # --- Print job callbacks ---
