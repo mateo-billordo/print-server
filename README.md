@@ -363,6 +363,11 @@ On the server:
 
 ```bash
 cd ~/impresora-server
-git pull
-docker compose build --no-cache && docker compose up -d
+bash deploy.sh
+```
+
+The deploy script pulls latest changes, rebuilds the container, and restarts the bot. Equivalent to:
+
+```bash
+git pull && docker compose build --no-cache && docker compose up -d
 ```
