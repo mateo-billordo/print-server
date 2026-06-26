@@ -75,6 +75,29 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
 
         result = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
         if full_id not in result.stdout:
+            # Job left CUPS queue — verify printer actually finishes (becomes idle)
+            return _verify_print_finished(elapsed)
+
+    return ("timeout", "")
+
+
+def _verify_print_finished(elapsed_so_far: int) -> tuple[str, str]:
+    """After job leaves CUPS queue, wait for printer to go idle.
+    The hp backend buffers data and may still be retrying the printer."""
+    remaining = JOB_POLL_TIMEOUT - elapsed_so_far
+    waited = 0
+    while waited < remaining:
+        time.sleep(JOB_POLL_INTERVAL)
+        waited += JOB_POLL_INTERVAL
+
+        status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
+        output = status.stdout.lower() if status.stdout else ""
+
+        if "disabled" in output or "stopped" in output:
+            reason = extract_printer_reason(status.stdout)
+            return ("error", reason)
+
+        if "idle" in output:
             return ("completed", "")
 
     return ("timeout", "")
