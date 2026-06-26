@@ -322,7 +322,17 @@ def parse_page_log_line(line: str) -> tuple[str, int] | None:
 # --- Printer status watcher (proactive admin notification) ---
 
 PRINTER_CHECK_INTERVAL = 30  # seconds between printer status checks
+HP_USB_ID = os.getenv("HP_USB_ID", "03f0")  # HP vendor ID for lsusb detection
 _printer_was_ok = True  # tracks last known state to avoid repeated alerts
+
+
+def is_printer_usb_connected() -> bool:
+    """Check if the printer's USB device is visible to the system."""
+    try:
+        result = subprocess.run(["lsusb"], capture_output=True, text=True)
+        return HP_USB_ID in result.stdout.lower()
+    except Exception:
+        return True  # assume connected if lsusb fails
 
 
 def printer_status_watcher():
@@ -339,11 +349,16 @@ def printer_status_watcher():
             if "disabled" in output or "stopped" in output:
                 if _printer_was_ok:
                     _printer_was_ok = False
+                    usb_connected = is_printer_usb_connected()
                     reason = result.stdout.strip()
+                    if usb_connected:
+                        msg_key = "printer_alert"
+                    else:
+                        msg_key = "printer_alert_hw_off"
                     try:
                         bot.send_message(
                             ADMIN_ID,
-                            MSGS["printer_alert"].format(status=reason),
+                            MSGS[msg_key].format(status=reason),
                             parse_mode="Markdown"
                         )
                     except Exception as e:
@@ -617,8 +632,13 @@ def get_printer_status() -> str:
     result = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
     printer_line = result.stdout.strip() if result.stdout else "No se pudo obtener estado"
 
+    # USB connectivity
+    usb_connected = is_printer_usb_connected()
+
     # Determine status emoji
-    if "idle" in printer_line.lower():
+    if not usb_connected:
+        status_emoji = "⚫"
+    elif "idle" in printer_line.lower():
         status_emoji = "🟢"
     elif "printing" in printer_line.lower():
         status_emoji = "🔵"
@@ -636,7 +656,9 @@ def get_printer_status() -> str:
     completed_jobs = [l.strip() for l in completed.stdout.strip().splitlines() if l.strip()] if completed.stdout else []
     recent = completed_jobs[-5:] if completed_jobs else []
 
-    lines = [f"{status_emoji} *Estado:* `{printer_line}`", ""]
+    lines = [f"{status_emoji} *Estado:* `{printer_line}`"]
+    lines.append(f"🔌 *USB:* {'conectada' if usb_connected else '⚠️ NO DETECTADA — impresora apagada?'}")
+    lines.append("")
 
     if active_jobs:
         lines.append(f"📋 *Cola activa ({len(active_jobs)}):*")
@@ -672,6 +694,15 @@ def reactivate_printer() -> str:
 
 def execute_print_job(chat_id: int, job: dict):
     """Executes lp command in a background thread, polls for completion."""
+    # Check if printer is physically connected before attempting
+    if not is_printer_usb_connected():
+        bot.send_message(chat_id, MSGS["printer_hw_off_user"], parse_mode="Markdown")
+        try:
+            os.remove(job["file_path"])
+        except OSError:
+            pass
+        return
+
     print_path = convert_image_to_pdf(job["file_path"], grayscale=(job["color"] == "Gray")) or job["file_path"]
     cmd = [
         "lp", "-d", PRINTER_NAME,

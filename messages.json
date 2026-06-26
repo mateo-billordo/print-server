@@ -72,6 +72,8 @@
   "testpage_sent": "✅ Página de prueba enviada a la impresora.",
   "testpage_error": "❌ Error al imprimir la página de prueba.",
   "printer_alert": "🚨 *¡Alerta de impresora!*\n\nLa impresora se deshabilitó:\n`{status}`\n\nUsá 🔧 *Reactivar* en el menú de Tinta para intentar recuperarla.",
+  "printer_alert_hw_off": "⚫ *¡Impresora apagada!*\n\nNo se detecta el dispositivo USB. La impresora está físicamente apagada.\n`{status}`\n\n⚠️ Necesita encendido manual — el bot no puede encenderla.",
+  "printer_hw_off_user": "⚫ *Impresora apagada*\n\nLa impresora no está encendida en este momento. Tu archivo no se pudo imprimir.\n\nPedile al admin que la encienda 🔌",
   "printer_reactivated": "✅ Impresora reactivada. Se cancelaron trabajos pendientes y se habilitó de nuevo.",
   "printer_reactivate_error": "❌ No se pudo reactivar la impresora:\n`{error}`",
   "email_config_show": "📧 *Configuración de email:*\n\nEstado: {status}\nDirección: `{address}`\nTimer: cada `{timer}` minutos",
