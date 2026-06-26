@@ -1399,18 +1399,10 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
-        # Generate a simple test page (host testprint file not available inside container)
-        test_file = "/tmp/testpage.txt"
-        with open(test_file, "w") as f:
-            f.write(f"=== PAGINA DE PRUEBA ===\n\nImpresora: {PRINTER_NAME}\nBot Print Server OK\n")
         result = subprocess.run(
-            ["lp", "-d", PRINTER_NAME, test_file],
+            ["lp", "-d", PRINTER_NAME, "/usr/share/cups/data/testprint"],
             capture_output=True, text=True
         )
-        try:
-            os.remove(test_file)
-        except OSError:
-            pass
         if result.returncode == 0:
             bot.edit_message_text(MSGS["testpage_sent"], chat_id, msg_id,
                                  reply_markup=build_tinta_sub_menu())

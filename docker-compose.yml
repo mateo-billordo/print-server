@@ -9,4 +9,5 @@ services:
       - ${CUPS_RUN_PATH}:/var/run/cups
       - ${CUPS_LOG_PATH}:/var/log/cups
       - ${DATA_PATH}:/data
+      - /usr/share/cups/data/testprint:/usr/share/cups/data/testprint:ro
     network_mode: "host"
