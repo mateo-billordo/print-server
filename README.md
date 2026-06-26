@@ -28,6 +28,10 @@ A Telegram bot that turns a legacy laptop into a home print server. Authorized f
 - **Interactive print menu** — Choose copies, color mode (B&W / Color) before printing
 - **Silent priority queue** — VIP jobs print before USER jobs via CUPS priority
 - **Ink tracking** — Background watcher counts ALL pages from CUPS logs (bot + network), alerts admin when refill is needed
+- **Printer health monitoring** — Proactive status watcher detects disabled queue and hardware power-off (USB detection via `lsusb`), alerts admin automatically
+- **Printer monitor** — Admin can check real-time printer state, active queue, and recent completed jobs
+- **Self-healing** — One-tap reactivation recovers a disabled printer queue (cancel + enable + accept)
+- **Hardware-off detection** — Users are informed immediately if the printer is physically off when they try to print
 - **Nickname system** — Users can set a custom alias
 - **Inline menu system** — Role-aware inline keyboard appears after every interaction; no command menu needed
 - **Email-to-print** — Gmail IMAP reader prints attachments from whitelisted email addresses on a configurable timer
@@ -81,6 +85,7 @@ TELEGRAM_TOKEN=your_bot_token
 ADMIN_ID=your_telegram_chat_id
 PRINTER_NAME=HP-2515
 ENCRYPTION_KEY=your_fernet_key
+HP_USB_ID=03f0
 CUPS_RUN_PATH=/var/run/cups
 CUPS_LOG_PATH=/var/log/cups
 DATA_PATH=/home/mateo/impresora-server/data
@@ -198,6 +203,9 @@ Main Menu
 └── 🖨️ Tinta (admin, sub-menu)
     ├── 📊 Estado — page counters
     ├── 🔄 Reiniciar — reset counters
+    ├── 🔍 Monitor — printer state, queue, recent jobs, USB status
+    ├── 🔧 Reactivar — recover disabled printer queue
+    ├── 🧪 Página de prueba — send test page
     └── ← Volver
 ```
 
