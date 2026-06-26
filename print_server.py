@@ -946,15 +946,15 @@ def build_email_config_sub_menu() -> types.InlineKeyboardMarkup:
 def build_monitor_sub_menu() -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(MSGS["sub_tinta_monitor"], callback_data="tsub_monitor"),
-        types.InlineKeyboardButton(MSGS["sub_tinta_reactivar"], callback_data="tsub_reactivar"),
+        types.InlineKeyboardButton(MSGS["sub_monitor_printer"], callback_data="tsub_monitor"),
+        types.InlineKeyboardButton(MSGS["sub_monitor_reactivar"], callback_data="tsub_reactivar"),
     )
     markup.add(
-        types.InlineKeyboardButton(MSGS["sub_tinta_wipe_queue"], callback_data="tsub_wipe"),
-        types.InlineKeyboardButton(MSGS["sub_tinta_testpage"], callback_data="tsub_testpage"),
+        types.InlineKeyboardButton(MSGS["sub_monitor_wipe_queue"], callback_data="tsub_wipe"),
+        types.InlineKeyboardButton(MSGS["sub_monitor_testpage"], callback_data="tsub_testpage"),
     )
     markup.add(
-        types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
+        types.InlineKeyboardButton(MSGS["sub_monitor_status"], callback_data="tsub_status"),
     )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
     return markup
@@ -1397,7 +1397,7 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(MSGS["sub_tinta_title"], chat_id, msg_id,
+        bot.edit_message_text(MSGS["sub_monitor_title"], chat_id, msg_id,
                              reply_markup=build_monitor_sub_menu(), parse_mode="Markdown")
         return
 
@@ -1407,7 +1407,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         bw, color = get_ink_counters()
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"))
+        markup.add(types.InlineKeyboardButton(MSGS["sub_monitor_reset"], callback_data="tsub_reset"))
         markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_monitor_sub"))
         bot.edit_message_text(
             MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
