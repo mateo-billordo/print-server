@@ -27,10 +27,10 @@ A Telegram bot that turns a legacy laptop into a home print server. Authorized f
 - **Access control** — Admin approves users via inline buttons (USER / VIP roles)
 - **Interactive print menu** — Choose copies, color mode (B&W / Color) before printing
 - **Silent priority queue** — VIP jobs print before USER jobs via CUPS priority
-- **Ink tracking** — Background watcher counts ALL pages from CUPS logs (bot + network), alerts admin when refill is needed
+- **Ink tracking** — Counts pages sent to printer, alerts admin when refill thresholds are reached
 - **Printer health monitoring** — Proactive status watcher detects disabled queue and hardware power-off (USB detection via `lsusb`), alerts admin automatically
-- **Printer monitor** — Admin can check real-time printer state, active queue, and recent completed jobs
-- **Self-healing** — One-tap reactivation recovers a disabled printer queue (cancel + enable + accept)
+- **Printer monitor** — Admin can check real-time printer state, active queue, recent completed jobs, and USB connectivity
+- **Self-healing** — One-tap reactivation recovers a disabled printer queue (enable + accept)
 - **Hardware-off detection** — Users are informed immediately if the printer is physically off when they try to print
 - **Nickname system** — Users can set a custom alias
 - **Inline menu system** — Role-aware inline keyboard appears after every interaction; no command menu needed
@@ -314,37 +314,40 @@ See [`server-setup/README.md`](server-setup/README.md) for host-level configurat
 
 ## Error Detection
 
-The bot detects printer issues through multiple mechanisms:
+The bot detects printer issues at submission time:
 
 | Error Type | Detection Method | Response Time |
 |-----------|-----------------|---------------|
-| Printer physically off | `lsusb` USB check before printing | **Instant** — user told immediately |
-| CUPS queue disabled/stopped | `lpstat -p` polling during job | **~2 seconds** |
-| Admin wipes queue | Internal job tracking | **~2 seconds** — user gets "canceled" message |
-| Paper out / paper jam | Poll timeout | **~60 seconds** — user told to check printer display |
+| Printer physically off | `lsusb` USB check before submitting | **Instant** — user told immediately, job not sent |
+| `lp` command failure | Exit code check | **Instant** — user told the job couldn't be queued |
+| CUPS queue disabled/stopped | Proactive `printer_status_watcher` | **~30 seconds** — admin alerted automatically |
 
-### Limitations
+### Design Decision: No Job Polling
 
-The HP DeskJet 2515 over USB has a fundamental limitation for paper-out detection:
+The bot does **not** poll for job completion. When `lp` succeeds, the user is told "📨 Enviado a la cola de impresión." After that, CUPS and the printer handle the rest.
 
-1. The HPLIP `hp` backend holds an exclusive USB lock while printing
-2. When paper runs out, the backend hangs silently waiting for the printer to be ready
-3. It never reports the failure to CUPS — so CUPS keeps showing "now printing"
-4. The USB device can't be queried independently (locked by the backend)
-5. Sending signals (SIGTERM/SIGKILL) to the backend doesn't work because it's in uninterruptible I/O
+**Why:** The HP DeskJet 2515 over USB with the HPLIP backend makes it impossible to reliably detect post-submission errors (paper out, jam) from software:
+
+1. The `hp` backend holds an exclusive USB lock while printing
+2. When paper runs out, the backend hangs silently — never reports failure to CUPS
+3. The USB device can't be queried independently (locked by the backend)
+4. CUPS shows "idle" immediately after accepting the job (backend buffers data internally)
+5. There's no signal to distinguish "printed successfully" from "backend retrying silently"
 
 **Approaches tested and ruled out:**
-- `printer-error-policy=stop-printer` — doesn't help (backend never returns an error)
-- `hp-info` / HPLIP Python API — can't connect (USB locked)
-- Backend wrapper with `timeout` — CUPS enters broken state when filter pipeline is interrupted
+- `printer-error-policy=stop-printer` — backend never returns an error to trigger it
+- `hp-info` / HPLIP Python API — can't connect (USB locked by backend)
+- Backend wrapper with `timeout` — CUPS enters broken state when pipeline is interrupted
+- `lpstat -p` polling — shows "idle" regardless of actual print outcome for small files
+- Grace period waiting — no state change to detect after job leaves CUPS queue
 
-**Result:** The 60-second poll timeout is the only reliable detection mechanism for paper-out/jam on this hardware. The user receives a clear message directing them to check the printer's physical display.
+**Result:** The bot reports queue submission honestly and relies on the admin's printer_status_watcher + the Monitor button for ongoing printer health.
 
 ## Ink Alert Logic
 
 - Thresholds: 200 pages each (B&W and Color)
-- Background watcher tails `/var/log/cups/page_log` every 5 seconds
-- Bot-submitted jobs: color mode tracked via job ID; page counter incremented directly on job completion (CUPS 2.x on Ubuntu 24.04 does not write page_log by default)
+- Page counters incremented on successful queue submission (counts jobs sent, not pages physically printed)
+- Background watcher tails `/var/log/cups/page_log` for network prints (fallback)
 - Network jobs: default to color (conservative)
 - Alerts sent to admin every 25 pages past the threshold
 
