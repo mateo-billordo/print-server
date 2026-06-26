@@ -628,16 +628,17 @@ def poll_job_completion(job_id: str) -> str:
 
 def get_printer_status() -> str:
     """Get formatted printer status for the admin monitor."""
+    # USB connectivity (check first — lpstat can be stale)
+    usb_connected = is_printer_usb_connected()
+
     # Printer state
     result = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
     printer_line = result.stdout.strip() if result.stdout else "No se pudo obtener estado"
 
-    # USB connectivity
-    usb_connected = is_printer_usb_connected()
-
-    # Determine status emoji
+    # Determine status emoji — USB takes priority
     if not usb_connected:
         status_emoji = "⚫"
+        printer_line = "Impresora apagada (USB no detectado)"
     elif "idle" in printer_line.lower():
         status_emoji = "🟢"
     elif "printing" in printer_line.lower():
@@ -679,13 +680,11 @@ def get_printer_status() -> str:
 
 
 def reactivate_printer() -> str:
-    """Re-enable printer and cancel stuck jobs. Returns status message."""
-    # Cancel all pending jobs
-    cancel_result = subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
+    """Re-enable printer queue without canceling pending jobs. Returns status message."""
     # Re-enable the printer
     enable_result = subprocess.run(["cupsenable", PRINTER_NAME], capture_output=True, text=True)
     # Accept new jobs
-    accept_result = subprocess.run(["cupsaccept", PRINTER_NAME], capture_output=True, text=True)
+    subprocess.run(["cupsaccept", PRINTER_NAME], capture_output=True, text=True)
 
     if enable_result.returncode == 0:
         return "ok"
@@ -885,15 +884,16 @@ def build_email_config_sub_menu() -> types.InlineKeyboardMarkup:
 def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
-        types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
-    )
-    markup.add(
         types.InlineKeyboardButton(MSGS["sub_tinta_monitor"], callback_data="tsub_monitor"),
         types.InlineKeyboardButton(MSGS["sub_tinta_reactivar"], callback_data="tsub_reactivar"),
     )
     markup.add(
+        types.InlineKeyboardButton(MSGS["sub_tinta_wipe_queue"], callback_data="tsub_wipe"),
         types.InlineKeyboardButton(MSGS["sub_tinta_testpage"], callback_data="tsub_testpage"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
+        types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
     )
     markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_back"))
     return markup
@@ -1392,6 +1392,15 @@ def handle_callback(call):
                 MSGS["printer_reactivate_error"].format(error=result),
                 chat_id, msg_id, reply_markup=build_tinta_sub_menu()
             )
+        return
+
+    if call.data == "tsub_wipe":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
+        bot.edit_message_text(MSGS["queue_wiped"], chat_id, msg_id,
+                             reply_markup=build_tinta_sub_menu())
         return
 
     # --- Print job callbacks ---
