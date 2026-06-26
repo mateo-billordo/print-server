@@ -319,6 +319,44 @@ def parse_page_log_line(line: str) -> tuple[str, int] | None:
         return None
 
 
+# --- Printer status watcher (proactive admin notification) ---
+
+PRINTER_CHECK_INTERVAL = 30  # seconds between printer status checks
+_printer_was_ok = True  # tracks last known state to avoid repeated alerts
+
+
+def printer_status_watcher():
+    """Periodically checks printer status and notifies admin on error/disabled."""
+    global _printer_was_ok
+    log.info("Printer status watcher started (every %ds)", PRINTER_CHECK_INTERVAL)
+    time.sleep(10)  # initial delay to let bot start up
+
+    while True:
+        try:
+            result = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
+            output = result.stdout.lower() if result.stdout else ""
+
+            if "disabled" in output or "stopped" in output:
+                if _printer_was_ok:
+                    _printer_was_ok = False
+                    reason = result.stdout.strip()
+                    try:
+                        bot.send_message(
+                            ADMIN_ID,
+                            MSGS["printer_alert"].format(status=reason),
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        log.error("Failed to send printer alert: %s", e)
+            else:
+                _printer_was_ok = True
+
+        except Exception as e:
+            log.error("Printer status watcher error: %s", e)
+
+        time.sleep(PRINTER_CHECK_INTERVAL)
+
+
 # --- Email processing thread ---
 
 def parse_email_body(body: str) -> tuple[int, str]:
@@ -573,6 +611,65 @@ def poll_job_completion(job_id: str) -> str:
     return "timeout"
 
 
+def get_printer_status() -> str:
+    """Get formatted printer status for the admin monitor."""
+    # Printer state
+    result = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
+    printer_line = result.stdout.strip() if result.stdout else "No se pudo obtener estado"
+
+    # Determine status emoji
+    if "idle" in printer_line.lower():
+        status_emoji = "🟢"
+    elif "printing" in printer_line.lower():
+        status_emoji = "🔵"
+    elif "disabled" in printer_line.lower():
+        status_emoji = "🔴"
+    else:
+        status_emoji = "⚪"
+
+    # Active jobs in queue
+    active = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
+    active_jobs = [l.strip() for l in active.stdout.strip().splitlines() if l.strip()] if active.stdout else []
+
+    # Recent completed jobs (last 5)
+    completed = subprocess.run(["lpstat", "-W", "completed", "-o", PRINTER_NAME], capture_output=True, text=True)
+    completed_jobs = [l.strip() for l in completed.stdout.strip().splitlines() if l.strip()] if completed.stdout else []
+    recent = completed_jobs[-5:] if completed_jobs else []
+
+    lines = [f"{status_emoji} *Estado:* `{printer_line}`", ""]
+
+    if active_jobs:
+        lines.append(f"📋 *Cola activa ({len(active_jobs)}):*")
+        for j in active_jobs[:5]:
+            lines.append(f"  `{j}`")
+    else:
+        lines.append("📋 *Cola activa:* vacía")
+
+    lines.append("")
+    if recent:
+        lines.append(f"✅ *Últimos trabajos ({len(completed_jobs)} total):*")
+        for j in recent:
+            lines.append(f"  `{j}`")
+    else:
+        lines.append("✅ *Últimos trabajos:* ninguno")
+
+    return "\n".join(lines)
+
+
+def reactivate_printer() -> str:
+    """Re-enable printer and cancel stuck jobs. Returns status message."""
+    # Cancel all pending jobs
+    cancel_result = subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
+    # Re-enable the printer
+    enable_result = subprocess.run(["cupsenable", PRINTER_NAME], capture_output=True, text=True)
+    # Accept new jobs
+    accept_result = subprocess.run(["cupsaccept", PRINTER_NAME], capture_output=True, text=True)
+
+    if enable_result.returncode == 0:
+        return "ok"
+    return enable_result.stderr.strip() or "Error desconocido"
+
+
 def execute_print_job(chat_id: int, job: dict):
     """Executes lp command in a background thread, polls for completion."""
     print_path = convert_image_to_pdf(job["file_path"], grayscale=(job["color"] == "Gray")) or job["file_path"]
@@ -610,6 +707,13 @@ def execute_print_job(chat_id: int, job: dict):
     if job_id:
         status = poll_job_completion(job_id)
         if status == "completed":
+            # Increment page counter directly (page_log is deprecated in CUPS 2.x)
+            copies = job["copies"]
+            if job["color"] == "Gray":
+                add_pages(bw=copies, color=0)
+            else:
+                add_pages(bw=0, color=copies)
+            log.info("Job %s completed: +%d %s pages", job_id, copies, job["color"])
             bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
             bot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
@@ -752,6 +856,10 @@ def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
     markup.add(
         types.InlineKeyboardButton(MSGS["sub_tinta_status"], callback_data="tsub_status"),
         types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"),
+    )
+    markup.add(
+        types.InlineKeyboardButton(MSGS["sub_tinta_monitor"], callback_data="tsub_monitor"),
+        types.InlineKeyboardButton(MSGS["sub_tinta_reactivar"], callback_data="tsub_reactivar"),
     )
     markup.add(
         types.InlineKeyboardButton(MSGS["sub_tinta_testpage"], callback_data="tsub_testpage"),
@@ -1231,6 +1339,30 @@ def handle_callback(call):
                                  reply_markup=build_tinta_sub_menu())
         return
 
+    if call.data == "tsub_monitor":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        status_text = get_printer_status()
+        bot.edit_message_text(status_text, chat_id, msg_id,
+                             reply_markup=build_tinta_sub_menu(), parse_mode="Markdown")
+        return
+
+    if call.data == "tsub_reactivar":
+        if chat_id != ADMIN_ID:
+            return
+        bot.answer_callback_query(call.id)
+        result = reactivate_printer()
+        if result == "ok":
+            bot.edit_message_text(MSGS["printer_reactivated"], chat_id, msg_id,
+                                 reply_markup=build_tinta_sub_menu())
+        else:
+            bot.edit_message_text(
+                MSGS["printer_reactivate_error"].format(error=result),
+                chat_id, msg_id, reply_markup=build_tinta_sub_menu()
+            )
+        return
+
     # --- Print job callbacks ---
     with jobs_lock:
         if chat_id not in user_jobs:
@@ -1291,6 +1423,9 @@ if __name__ == '__main__':
 
     # Start page log watcher in background
     threading.Thread(target=page_log_watcher, daemon=True).start()
+
+    # Start printer status watcher in background
+    threading.Thread(target=printer_status_watcher, daemon=True).start()
 
     # Start email check loop in background
     threading.Thread(target=email_check_loop, daemon=True).start()
