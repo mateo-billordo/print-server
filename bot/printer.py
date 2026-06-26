@@ -56,7 +56,8 @@ def extract_printer_reason(lpstat_output: str) -> str:
 
 
 def poll_job_completion(job_id: str) -> tuple[str, str]:
-    """Poll lpstat until job completes. Returns (status, reason)."""
+    """Poll lpstat until job completes. Returns (status, reason).
+    status: 'completed', 'sent', 'error', 'canceled', or 'timeout'."""
     full_id = f"{PRINTER_NAME}-{job_id}"
     elapsed = 0
     while elapsed < JOB_POLL_TIMEOUT:
@@ -75,35 +76,12 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
 
         result = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
         if full_id not in result.stdout:
-            # Job left CUPS queue — verify printer actually finishes (becomes idle)
-            return _verify_print_finished(elapsed)
-
-    return ("timeout", "")
-
-
-PRINT_CONFIRM_DELAY = 15  # seconds to wait after job leaves queue before confirming success
-
-
-def _verify_print_finished(elapsed_so_far: int) -> tuple[str, str]:
-    """After job leaves CUPS queue, wait for confirmation that printing succeeded.
-    The hp backend buffers data and may still be retrying the printer.
-    We wait at least PRINT_CONFIRM_DELAY before declaring success."""
-    remaining = JOB_POLL_TIMEOUT - elapsed_so_far
-    waited = 0
-    while waited < remaining:
-        time.sleep(JOB_POLL_INTERVAL)
-        waited += JOB_POLL_INTERVAL
-
-        status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
-        output = status.stdout.lower() if status.stdout else ""
-
-        if "disabled" in output or "stopped" in output:
-            reason = extract_printer_reason(status.stdout)
-            return ("error", reason)
-
-        # Only trust "idle" after the grace period
-        if waited >= PRINT_CONFIRM_DELAY and "idle" in output:
-            return ("completed", "")
+            # Job left queue. If it was visible long enough (filter was slow = large file),
+            # CUPS actively processed it and we can trust it printed.
+            # If it vanished too fast (small file), backend buffered it — can't confirm.
+            if elapsed >= 10:
+                return ("completed", "")
+            return ("sent", "")
 
     return ("timeout", "")
 
@@ -217,6 +195,16 @@ def execute_print_job(chat_id: int, job: dict):
                 add_pages(bw=0, color=copies)
             log.info("Job %s completed: +%d %s pages", job_id, copies, job["color"])
             tgbot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+            tgbot.send_message(chat_id, MSGS["menu_prompt"],
+                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
+        elif status == "sent":
+            copies = job["copies"]
+            if job["color"] == "Gray":
+                add_pages(bw=copies, color=0)
+            else:
+                add_pages(bw=0, color=copies)
+            log.info("Job %s sent to printer: +%d %s pages", job_id, copies, job["color"])
+            tgbot.send_message(chat_id, MSGS["print_sent"].format(file=job["file_name"]), parse_mode="Markdown")
             tgbot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         elif status == "canceled":

@@ -14,6 +14,7 @@
   "sending_to_queue": "⏳ Mandando a cola de impresión...",
   "print_queued": "📨 Archivo `{file}` enviado a la cola de impresión. Te aviso cuando termine.",
   "print_success": "✅ *¡Impresión lista!*\nTu documento `{file}` se imprimió correctamente.",
+  "print_sent": "📨 *Enviado a la impresora*\nEl archivo `{file}` se envió a la impresora. Si no sale, revisá el display.",
   "print_failed": "❌ *Error al imprimir*\nEl archivo `{file}` falló durante la impresión. Revisá la impresora.",
   "print_failed_reason": "❌ *Error al imprimir*\nEl archivo `{file}` falló durante la impresión.\n\n🔎 *Motivo:* `{reason}`",
   "print_canceled": "🚫 *Impresión cancelada*\nEl archivo `{file}` fue cancelado por el administrador.",
