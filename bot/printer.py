@@ -101,7 +101,10 @@ def execute_print_job(chat_id: int, job: dict):
     from bot.keyboards import build_single_menu_button
 
     if not is_printer_usb_connected():
+        from bot.keyboards import build_single_menu_button
         tgbot.send_message(chat_id, MSGS["printer_hw_off_user"], parse_mode="Markdown")
+        tgbot.send_message(chat_id, MSGS["menu_prompt"],
+                         reply_markup=build_single_menu_button(), parse_mode="Markdown")
         try:
             os.remove(job["file_path"])
         except OSError:
