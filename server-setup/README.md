@@ -16,9 +16,10 @@ What it does:
 - Installs CUPS, HPLIP, and Avahi (mDNS/AirPrint discovery)
 - Configures CUPS to listen on all interfaces (LAN sharing)
 - Opens firewall ports (631/tcp, 5353/udp)
-- Sets error policy to `retry-current-job` (prevents printer from stopping on transient errors)
+- Sets error policy to `retry-current-job` (backend hangs on paper-out; see [Limitations](../README.md#limitations))
+- Sets `hpPenCheck=0` (disables ink chip "empty" verification for refilled cartridges)
 
-After running, add the printer via the CUPS web UI at `http://<server-ip>:631`.
+After running, add the printer via the CUPS web UI at `http://<server-ip>:631`. Verify the HPLIP backend is active with `lpstat -v HP-2515` (should show `hp:/usb/...`).
 
 ### fix-imagetoraster.sh
 

@@ -30,9 +30,11 @@ sudo systemctl enable --now cups
 sudo systemctl enable --now avahi-daemon
 sudo systemctl restart cups
 
-echo "=== Setting error policy to retry ==="
-# Prevents printer from stopping on transient errors
+echo "=== Setting error policy and ink chip bypass ==="
+# retry-current-job: CUPS retries on errors (backend hangs on paper-out, never reports failure)
 sudo lpadmin -p HP-2515 -o printer-error-policy=retry-current-job 2>/dev/null || true
+# hpPenCheck=0: disables ink level verification (allows printing past "empty" chips after refill)
+sudo lpadmin -p HP-2515 -o hpPenCheck=0 2>/dev/null || true
 
 echo ""
 echo "✅ CUPS setup complete."
@@ -40,6 +42,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Open http://$(hostname -I | awk '{print $1}'):631 in a browser"
 echo "  2. Add the printer via Administration → Add Printer → HP DeskJet 2515 (USB)"
-echo "  3. Run fix-imagetoraster.sh to patch the broken image filter"
+echo "  3. Verify HPLIP backend: lpstat -v HP-2515 (should show hp:/usb/...)"
+echo "  4. Run fix-imagetoraster.sh to patch the broken image filter"
 echo ""
 echo "Printer will be accessible at: ipp://$(hostname -I | awk '{print $1}'):631/printers/HP-2515"
