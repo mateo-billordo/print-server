@@ -609,8 +609,24 @@ JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
 JOB_POLL_TIMEOUT = 120  # max seconds to wait for a job to complete
 
 
-def poll_job_completion(job_id: str) -> str:
-    """Poll lpstat until job completes. Returns 'completed', 'error', or 'timeout'."""
+def extract_printer_reason(lpstat_output: str) -> str:
+    """Extract the error reason from lpstat -p output (text after the last dash)."""
+    for line in lpstat_output.strip().splitlines():
+        if "disabled" in line.lower():
+            # Format: "printer HP-2515 disabled since <date> -\n\treason" or "... - reason"
+            idx = line.rfind(" - ")
+            if idx != -1:
+                return line[idx + 3:].strip()
+    # Check indented continuation line
+    lines = lpstat_output.strip().splitlines()
+    if len(lines) > 1:
+        return lines[-1].strip()
+    return ""
+
+
+def poll_job_completion(job_id: str) -> tuple[str, str]:
+    """Poll lpstat until job completes. Returns (status, reason).
+    status: 'completed', 'error', or 'timeout'. reason: printer error detail or empty."""
     full_id = f"{PRINTER_NAME}-{job_id}"
     elapsed = 0
     while elapsed < JOB_POLL_TIMEOUT:
@@ -621,9 +637,10 @@ def poll_job_completion(job_id: str) -> str:
             # Job left the active queue — check if printer got disabled (error)
             status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
             if "disabled" in status.stdout.lower():
-                return "error"
-            return "completed"
-    return "timeout"
+                reason = extract_printer_reason(status.stdout)
+                return ("error", reason)
+            return ("completed", "")
+    return ("timeout", "")
 
 
 def get_printer_status() -> str:
@@ -735,7 +752,7 @@ def execute_print_job(chat_id: int, job: dict):
 
     # Poll for actual completion
     if job_id:
-        status = poll_job_completion(job_id)
+        status, reason = poll_job_completion(job_id)
         if status == "completed":
             # Increment page counter directly (page_log is deprecated in CUPS 2.x)
             copies = job["copies"]
@@ -748,7 +765,11 @@ def execute_print_job(chat_id: int, job: dict):
             bot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         elif status == "error":
-            bot.send_message(chat_id, MSGS["print_failed"].format(file=job["file_name"]), parse_mode="Markdown")
+            if reason:
+                msg = MSGS["print_failed_reason"].format(file=job["file_name"], reason=reason)
+            else:
+                msg = MSGS["print_failed"].format(file=job["file_name"])
+            bot.send_message(chat_id, msg, parse_mode="Markdown")
             bot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         else:
