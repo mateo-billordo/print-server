@@ -11,7 +11,6 @@ from bot.config import (
     BW_PAGE_LIMIT, COLOR_PAGE_LIMIT,
     tgbot, MSGS, log,
     user_jobs, jobs_lock, user_state,
-    _wiped_jobs, _wiped_jobs_lock,
     email_wake_event, DB_PATH,
 )
 from bot.db import (
@@ -515,15 +514,6 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         tgbot.answer_callback_query(call.id)
-        queued = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
-        if queued.stdout:
-            with _wiped_jobs_lock:
-                for line in queued.stdout.strip().splitlines():
-                    parts = line.split()
-                    if parts:
-                        job_full = parts[0]
-                        job_num = job_full.rsplit("-", 1)[-1]
-                        _wiped_jobs.add(job_num)
         subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
         tgbot.edit_message_text(MSGS["queue_wiped"], chat_id, msg_id,
                              reply_markup=build_monitor_back_button())

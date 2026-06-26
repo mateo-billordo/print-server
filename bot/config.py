@@ -30,8 +30,6 @@ COLOR_PAGE_LIMIT = 200
 ALERT_INTERVAL = 25
 LOG_POLL_SECONDS = 5
 PRINTER_CHECK_INTERVAL = 30
-JOB_POLL_INTERVAL = 2
-JOB_POLL_TIMEOUT = 60
 UNASSIGNED_USER_ID = -1
 
 # --- Logging ---
@@ -58,8 +56,5 @@ user_state: dict[int, str] = {}
 
 tracked_jobs: dict[str, str] = {}
 tracked_jobs_lock = threading.Lock()
-
-_wiped_jobs: set[str] = set()
-_wiped_jobs_lock = threading.Lock()
 
 email_wake_event = threading.Event()

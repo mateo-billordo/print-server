@@ -1,16 +1,13 @@
 import os
 import re
 import subprocess
-import time
 
 from PIL import Image
 import img2pdf
 
 from bot.config import (
     PRINTER_NAME, HP_USB_ID, PRINT_DIR,
-    JOB_POLL_INTERVAL, JOB_POLL_TIMEOUT,
     tracked_jobs, tracked_jobs_lock,
-    _wiped_jobs, _wiped_jobs_lock,
     tgbot, MSGS, log,
 )
 from bot.db import add_pages
@@ -40,50 +37,6 @@ def is_printer_usb_connected() -> bool:
         return HP_USB_ID in result.stdout.lower()
     except Exception:
         return True
-
-
-def extract_printer_reason(lpstat_output: str) -> str:
-    """Extract the error reason from lpstat -p output."""
-    for line in lpstat_output.strip().splitlines():
-        if "disabled" in line.lower():
-            idx = line.rfind(" - ")
-            if idx != -1:
-                return line[idx + 3:].strip()
-    lines = lpstat_output.strip().splitlines()
-    if len(lines) > 1:
-        return lines[-1].strip()
-    return ""
-
-
-def poll_job_completion(job_id: str) -> tuple[str, str]:
-    """Poll lpstat until job completes. Returns (status, reason).
-    status: 'completed', 'sent', 'error', 'canceled', or 'timeout'."""
-    full_id = f"{PRINTER_NAME}-{job_id}"
-    elapsed = 0
-    while elapsed < JOB_POLL_TIMEOUT:
-        time.sleep(JOB_POLL_INTERVAL)
-        elapsed += JOB_POLL_INTERVAL
-
-        with _wiped_jobs_lock:
-            if job_id in _wiped_jobs:
-                _wiped_jobs.discard(job_id)
-                return ("canceled", "")
-
-        printer_status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
-        if "disabled" in printer_status.stdout.lower() or "stopped" in printer_status.stdout.lower():
-            reason = extract_printer_reason(printer_status.stdout)
-            return ("error", reason)
-
-        result = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
-        if full_id not in result.stdout:
-            # Job left queue. If it was visible long enough (filter was slow = large file),
-            # CUPS actively processed it and we can trust it printed.
-            # If it vanished too fast (small file), backend buffered it — can't confirm.
-            if elapsed >= 10:
-                return ("completed", "")
-            return ("sent", "")
-
-    return ("timeout", "")
 
 
 def get_printer_status() -> str:
@@ -144,7 +97,7 @@ def reactivate_printer() -> str:
 
 
 def execute_print_job(chat_id: int, job: dict):
-    """Executes lp command in a background thread, polls for completion."""
+    """Executes lp command in a background thread. Reports queue submission result only."""
     from bot.keyboards import build_single_menu_button
 
     if not is_printer_usb_connected():
@@ -166,66 +119,30 @@ def execute_print_job(chat_id: int, job: dict):
     log.info("Printing for user %d: %s", chat_id, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    if result.returncode != 0:
-        log.error("lp failed for user %d: %s", chat_id, result.stderr)
-        tgbot.send_message(chat_id, MSGS["print_error"])
-        if print_path != job["file_path"]:
-            try:
-                os.remove(print_path)
-            except OSError:
-                pass
-        return
-
-    match = re.search(r"request id is \S+-(\d+)", result.stdout)
-    job_id = match.group(1) if match else None
-    if job_id:
-        with tracked_jobs_lock:
-            tracked_jobs[job_id] = job["color"]
-        log.info("Registered job %s as %s", job_id, job["color"])
-
-    tgbot.send_message(chat_id, MSGS["print_queued"].format(file=job["file_name"]), parse_mode="Markdown")
-
-    if job_id:
-        status, reason = poll_job_completion(job_id)
-        if status == "completed":
-            copies = job["copies"]
-            if job["color"] == "Gray":
-                add_pages(bw=copies, color=0)
-            else:
-                add_pages(bw=0, color=copies)
-            log.info("Job %s completed: +%d %s pages", job_id, copies, job["color"])
-            tgbot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
-            tgbot.send_message(chat_id, MSGS["menu_prompt"],
-                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
-        elif status == "sent":
-            copies = job["copies"]
-            if job["color"] == "Gray":
-                add_pages(bw=copies, color=0)
-            else:
-                add_pages(bw=0, color=copies)
-            log.info("Job %s sent to printer: +%d %s pages", job_id, copies, job["color"])
-            tgbot.send_message(chat_id, MSGS["print_sent"].format(file=job["file_name"]), parse_mode="Markdown")
-            tgbot.send_message(chat_id, MSGS["menu_prompt"],
-                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
-        elif status == "canceled":
-            tgbot.send_message(chat_id, MSGS["print_canceled"].format(file=job["file_name"]), parse_mode="Markdown")
-            tgbot.send_message(chat_id, MSGS["menu_prompt"],
-                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
-        elif status == "error":
-            if reason:
-                msg = MSGS["print_failed_reason"].format(file=job["file_name"], reason=reason)
-            else:
-                msg = MSGS["print_failed"].format(file=job["file_name"])
-            tgbot.send_message(chat_id, msg, parse_mode="Markdown")
-            tgbot.send_message(chat_id, MSGS["menu_prompt"],
-                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
-        else:
-            tgbot.send_message(chat_id, MSGS["print_timeout"].format(file=job["file_name"]), parse_mode="Markdown")
-            tgbot.send_message(chat_id, MSGS["menu_prompt"],
-                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
-
     if print_path != job["file_path"]:
         try:
             os.remove(print_path)
         except OSError:
             pass
+
+    if result.returncode != 0:
+        log.error("lp failed for user %d: %s", chat_id, result.stderr)
+        tgbot.send_message(chat_id, MSGS["print_error"], parse_mode="Markdown")
+        return
+
+    # Track job for ink counting
+    match = re.search(r"request id is \S+-(\d+)", result.stdout)
+    if match:
+        with tracked_jobs_lock:
+            tracked_jobs[match.group(1)] = job["color"]
+
+    # Count pages on submission
+    copies = job["copies"]
+    if job["color"] == "Gray":
+        add_pages(bw=copies, color=0)
+    else:
+        add_pages(bw=0, color=copies)
+
+    tgbot.send_message(chat_id, MSGS["print_sent"].format(file=job["file_name"]), parse_mode="Markdown")
+    tgbot.send_message(chat_id, MSGS["menu_prompt"],
+                     reply_markup=build_single_menu_button(), parse_mode="Markdown")
