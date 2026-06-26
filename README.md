@@ -73,8 +73,8 @@ Docker Container (python:3.11-slim)
 
 - Docker & Docker Compose installed on the host
 - CUPS configured with the printer registered as `HP-2515`
+- HPLIP backend active (`hp:/usb/...` device URI) with ink check disabled
 - Avahi daemon for network discovery (AirPrint)
-- HPLIP disabled (to bypass ink chip restrictions)
 
 ### Environment variables
 
@@ -126,11 +126,21 @@ Listen *:631
 
 #### Ink chip bypass
 
+The HP DeskJet 2515 has cartridge chips that report "empty" prematurely. The HPLIP backend (`hp`) is kept active for paper-out detection, but ink verification is disabled:
+
 ```bash
+sudo lpadmin -p HP-2515 -o hpPenCheck=0
 sudo lpadmin -p HP-2515 -o printer-error-policy=retry-current-job
-sudo systemctl stop hplip
-sudo systemctl disable hplip
-cupsenable HP-2515
+```
+
+- `hpPenCheck=0` — skips ink level verification (allows printing past "empty" chips after refill)
+- `retry-current-job` — CUPS retries on errors instead of stopping (see [Limitations](#limitations))
+
+Verify the printer uses the HPLIP backend (not generic USB):
+
+```bash
+lpstat -v HP-2515
+# Expected: device for HP-2515: hp:/usb/Deskjet_2510_series?serial=...
 ```
 
 #### Network discovery (AirPrint)
@@ -200,12 +210,12 @@ Main Menu
 │   ├── 🗑️ Eliminar — pick user to remove
 │   ├── 🔄 Cambiar rol — pick user to toggle USER/VIP
 │   └── ← Volver
-└── 🖨️ Tinta (admin, sub-menu)
-    ├── 📊 Estado — page counters
-    ├── 🔄 Reiniciar — reset counters
+└── 🔍 Monitorear (admin, sub-menu)
     ├── 🔍 Monitor — printer state, queue, recent jobs, USB status
-    ├── 🔧 Reactivar — recover disabled printer queue
-    ├── 🧪 Página de prueba — send test page
+    ├── 🔧 Reactivar — recover disabled printer queue (without wiping jobs)
+    ├── 🗑️ Vaciar cola — cancel all pending print jobs
+    ├── 🧪 Página de prueba — send CUPS test page
+    ├── 📊 Estado tinta — page counters + reset option
     └── ← Volver
 ```
 
@@ -302,14 +312,41 @@ See [`server-setup/README.md`](server-setup/README.md) for host-level configurat
 | user_id | INTEGER | Telegram chat_id (or -1 for unassigned) |
 | email | TEXT (UNIQUE) | Whitelisted email address |
 
+## Error Detection
+
+The bot detects printer issues through multiple mechanisms:
+
+| Error Type | Detection Method | Response Time |
+|-----------|-----------------|---------------|
+| Printer physically off | `lsusb` USB check before printing | **Instant** — user told immediately |
+| CUPS queue disabled/stopped | `lpstat -p` polling during job | **~2 seconds** |
+| Admin wipes queue | Internal job tracking | **~2 seconds** — user gets "canceled" message |
+| Paper out / paper jam | Poll timeout | **~60 seconds** — user told to check printer display |
+
+### Limitations
+
+The HP DeskJet 2515 over USB has a fundamental limitation for paper-out detection:
+
+1. The HPLIP `hp` backend holds an exclusive USB lock while printing
+2. When paper runs out, the backend hangs silently waiting for the printer to be ready
+3. It never reports the failure to CUPS — so CUPS keeps showing "now printing"
+4. The USB device can't be queried independently (locked by the backend)
+5. Sending signals (SIGTERM/SIGKILL) to the backend doesn't work because it's in uninterruptible I/O
+
+**Approaches tested and ruled out:**
+- `printer-error-policy=stop-printer` — doesn't help (backend never returns an error)
+- `hp-info` / HPLIP Python API — can't connect (USB locked)
+- Backend wrapper with `timeout` — CUPS enters broken state when filter pipeline is interrupted
+
+**Result:** The 60-second poll timeout is the only reliable detection mechanism for paper-out/jam on this hardware. The user receives a clear message directing them to check the printer's physical display.
+
 ## Ink Alert Logic
 
 - Thresholds: 200 pages each (B&W and Color)
 - Background watcher tails `/var/log/cups/page_log` every 5 seconds
-- Bot-submitted jobs: color mode tracked via job ID
+- Bot-submitted jobs: color mode tracked via job ID; page counter incremented directly on job completion (CUPS 2.x on Ubuntu 24.04 does not write page_log by default)
 - Network jobs: default to color (conservative)
 - Alerts sent to admin every 25 pages past the threshold
-- `/reset_ink` zeros counters but preserves log offset
 
 ## Updating
 
