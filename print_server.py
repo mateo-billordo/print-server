@@ -606,7 +606,7 @@ def convert_image_to_pdf(file_path: str, grayscale: bool = False) -> str | None:
 # --- Print execution (runs in dedicated thread) ---
 
 JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
-JOB_POLL_TIMEOUT = 90  # max seconds (filter can take 40s+ for photos on slow hardware)
+JOB_POLL_TIMEOUT = 60  # max seconds (filter can take 40s+ for photos on slow hardware)
 
 
 # Tracks jobs canceled by admin wipe — poll_job_completion checks this
