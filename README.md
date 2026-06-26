@@ -369,8 +369,10 @@ cd ~/impresora-server
 bash deploy.sh
 ```
 
-The deploy script pulls latest changes, rebuilds the container, and restarts the bot. Equivalent to:
+Use `--force` if you changed volumes or network config:
 
 ```bash
-git pull && docker compose build --no-cache && docker compose up -d
+bash deploy.sh --force
 ```
+
+The deploy script pulls latest changes, rebuilds the container, and restarts the bot. `--force` runs `docker compose down` first to recreate volumes/networks.
