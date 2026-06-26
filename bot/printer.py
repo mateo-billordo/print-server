@@ -81,9 +81,13 @@ def poll_job_completion(job_id: str) -> tuple[str, str]:
     return ("timeout", "")
 
 
+PRINT_CONFIRM_DELAY = 15  # seconds to wait after job leaves queue before confirming success
+
+
 def _verify_print_finished(elapsed_so_far: int) -> tuple[str, str]:
-    """After job leaves CUPS queue, wait for printer to go idle.
-    The hp backend buffers data and may still be retrying the printer."""
+    """After job leaves CUPS queue, wait for confirmation that printing succeeded.
+    The hp backend buffers data and may still be retrying the printer.
+    We wait at least PRINT_CONFIRM_DELAY before declaring success."""
     remaining = JOB_POLL_TIMEOUT - elapsed_so_far
     waited = 0
     while waited < remaining:
@@ -97,7 +101,8 @@ def _verify_print_finished(elapsed_so_far: int) -> tuple[str, str]:
             reason = extract_printer_reason(status.stdout)
             return ("error", reason)
 
-        if "idle" in output:
+        # Only trust "idle" after the grace period
+        if waited >= PRINT_CONFIRM_DELAY and "idle" in output:
             return ("completed", "")
 
     return ("timeout", "")
