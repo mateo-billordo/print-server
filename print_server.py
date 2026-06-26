@@ -886,7 +886,7 @@ def build_main_menu(chat_id: int) -> types.InlineKeyboardMarkup:
     if chat_id == ADMIN_ID:
         markup.add(
             types.InlineKeyboardButton(MSGS["menu_users"], callback_data="menu_users_sub"),
-            types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_tinta_sub"),
+            types.InlineKeyboardButton(MSGS["menu_ink"], callback_data="menu_monitor_sub"),
         )
     return markup
 
@@ -943,7 +943,7 @@ def build_email_config_sub_menu() -> types.InlineKeyboardMarkup:
     return markup
 
 
-def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
+def build_monitor_sub_menu() -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(MSGS["sub_tinta_monitor"], callback_data="tsub_monitor"),
@@ -960,10 +960,10 @@ def build_tinta_sub_menu() -> types.InlineKeyboardMarkup:
     return markup
 
 
-def build_tinta_back_button() -> types.InlineKeyboardMarkup:
+def build_monitor_back_button() -> types.InlineKeyboardMarkup:
     """Single back button returning to the Monitorear sub-menu."""
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_tinta_sub"))
+    markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_monitor_sub"))
     return markup
 
 
@@ -1392,13 +1392,13 @@ def handle_callback(call):
         bot.edit_message_text(MSGS["ecfg_prompt_timer"], chat_id, msg_id)
         return
 
-    # --- Tinta sub-menu ---
-    if call.data == "menu_tinta_sub":
+    # --- Monitor sub-menu ---
+    if call.data == "menu_monitor_sub":
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
         bot.edit_message_text(MSGS["sub_tinta_title"], chat_id, msg_id,
-                             reply_markup=build_tinta_sub_menu(), parse_mode="Markdown")
+                             reply_markup=build_monitor_sub_menu(), parse_mode="Markdown")
         return
 
     if call.data == "tsub_status":
@@ -1408,7 +1408,7 @@ def handle_callback(call):
         bw, color = get_ink_counters()
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(MSGS["sub_tinta_reset"], callback_data="tsub_reset"))
-        markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_tinta_sub"))
+        markup.add(types.InlineKeyboardButton(MSGS["btn_back"], callback_data="menu_monitor_sub"))
         bot.edit_message_text(
             MSGS["ink_status"].format(bw=bw, bw_limit=BW_PAGE_LIMIT, color=color, color_limit=COLOR_PAGE_LIMIT),
             chat_id, msg_id, reply_markup=markup, parse_mode="Markdown"
@@ -1421,7 +1421,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         reset_ink_counters()
         bot.edit_message_text(MSGS["ink_reset_success"], chat_id, msg_id,
-                             reply_markup=build_tinta_back_button())
+                             reply_markup=build_monitor_back_button())
         return
 
     if call.data == "tsub_testpage":
@@ -1434,11 +1434,11 @@ def handle_callback(call):
         )
         if result.returncode == 0:
             bot.edit_message_text(MSGS["testpage_sent"], chat_id, msg_id,
-                                 reply_markup=build_tinta_back_button())
+                                 reply_markup=build_monitor_back_button())
         else:
             log.error("Test page failed: %s", result.stderr)
             bot.edit_message_text(MSGS["testpage_error"], chat_id, msg_id,
-                                 reply_markup=build_tinta_back_button())
+                                 reply_markup=build_monitor_back_button())
         return
 
     if call.data == "tsub_monitor":
@@ -1447,7 +1447,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         status_text = get_printer_status()
         bot.edit_message_text(status_text, chat_id, msg_id,
-                             reply_markup=build_tinta_back_button(), parse_mode="Markdown")
+                             reply_markup=build_monitor_back_button(), parse_mode="Markdown")
         return
 
     if call.data == "tsub_reactivar":
@@ -1457,11 +1457,11 @@ def handle_callback(call):
         result = reactivate_printer()
         if result == "ok":
             bot.edit_message_text(MSGS["printer_reactivated"], chat_id, msg_id,
-                                 reply_markup=build_tinta_back_button())
+                                 reply_markup=build_monitor_back_button())
         else:
             bot.edit_message_text(
                 MSGS["printer_reactivate_error"].format(error=result),
-                chat_id, msg_id, reply_markup=build_tinta_back_button()
+                chat_id, msg_id, reply_markup=build_monitor_back_button()
             )
         return
 
@@ -1482,7 +1482,7 @@ def handle_callback(call):
                         _wiped_jobs.add(job_num)
         subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
         bot.edit_message_text(MSGS["queue_wiped"], chat_id, msg_id,
-                             reply_markup=build_tinta_back_button())
+                             reply_markup=build_monitor_back_button())
         return
 
     # --- Print job callbacks ---
