@@ -11,7 +11,7 @@ from bot.config import (
     JOB_POLL_INTERVAL, JOB_POLL_TIMEOUT,
     tracked_jobs, tracked_jobs_lock,
     _wiped_jobs, _wiped_jobs_lock,
-    bot, MSGS, log,
+    tgbot, MSGS, log,
 )
 from bot.db import add_pages
 
@@ -142,7 +142,7 @@ def execute_print_job(chat_id: int, job: dict):
     from bot.keyboards import build_single_menu_button
 
     if not is_printer_usb_connected():
-        bot.send_message(chat_id, MSGS["printer_hw_off_user"], parse_mode="Markdown")
+        tgbot.send_message(chat_id, MSGS["printer_hw_off_user"], parse_mode="Markdown")
         try:
             os.remove(job["file_path"])
         except OSError:
@@ -162,7 +162,7 @@ def execute_print_job(chat_id: int, job: dict):
 
     if result.returncode != 0:
         log.error("lp failed for user %d: %s", chat_id, result.stderr)
-        bot.send_message(chat_id, MSGS["print_error"])
+        tgbot.send_message(chat_id, MSGS["print_error"])
         if print_path != job["file_path"]:
             try:
                 os.remove(print_path)
@@ -177,7 +177,7 @@ def execute_print_job(chat_id: int, job: dict):
             tracked_jobs[job_id] = job["color"]
         log.info("Registered job %s as %s", job_id, job["color"])
 
-    bot.send_message(chat_id, MSGS["print_queued"].format(file=job["file_name"]), parse_mode="Markdown")
+    tgbot.send_message(chat_id, MSGS["print_queued"].format(file=job["file_name"]), parse_mode="Markdown")
 
     if job_id:
         status, reason = poll_job_completion(job_id)
@@ -188,24 +188,24 @@ def execute_print_job(chat_id: int, job: dict):
             else:
                 add_pages(bw=0, color=copies)
             log.info("Job %s completed: +%d %s pages", job_id, copies, job["color"])
-            bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
-            bot.send_message(chat_id, MSGS["menu_prompt"],
+            tgbot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+            tgbot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         elif status == "canceled":
-            bot.send_message(chat_id, MSGS["print_canceled"].format(file=job["file_name"]), parse_mode="Markdown")
-            bot.send_message(chat_id, MSGS["menu_prompt"],
+            tgbot.send_message(chat_id, MSGS["print_canceled"].format(file=job["file_name"]), parse_mode="Markdown")
+            tgbot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         elif status == "error":
             if reason:
                 msg = MSGS["print_failed_reason"].format(file=job["file_name"], reason=reason)
             else:
                 msg = MSGS["print_failed"].format(file=job["file_name"])
-            bot.send_message(chat_id, msg, parse_mode="Markdown")
-            bot.send_message(chat_id, MSGS["menu_prompt"],
+            tgbot.send_message(chat_id, msg, parse_mode="Markdown")
+            tgbot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         else:
-            bot.send_message(chat_id, MSGS["print_timeout"].format(file=job["file_name"]), parse_mode="Markdown")
-            bot.send_message(chat_id, MSGS["menu_prompt"],
+            tgbot.send_message(chat_id, MSGS["print_timeout"].format(file=job["file_name"]), parse_mode="Markdown")
+            tgbot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
 
     if print_path != job["file_path"]:

@@ -42,7 +42,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # --- Bot instance ---
-bot = TeleBot(TOKEN, num_threads=4)
+tgbot = TeleBot(TOKEN, num_threads=4)
 
 # --- Messages ---
 with open("messages.json", "r", encoding="utf-8") as f:

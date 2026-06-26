@@ -1,5 +1,5 @@
 import sqlite3
-from bot.config import DB_PATH, ADMIN_ID, MSGS, bot, log, BW_PAGE_LIMIT, COLOR_PAGE_LIMIT, ALERT_INTERVAL
+from bot.config import DB_PATH, ADMIN_ID, MSGS, tgbot, log, BW_PAGE_LIMIT, COLOR_PAGE_LIMIT, ALERT_INTERVAL
 from cryptography.fernet import Fernet
 from bot.config import ENCRYPTION_KEY
 
@@ -105,7 +105,7 @@ def _check_ink_alerts(bw_pages: int, color_pages: int, last_alert_bw: int, last_
             alerts.append(MSGS["ink_alert_color"].format(count=color_pages, limit=COLOR_PAGE_LIMIT))
     for alert in alerts:
         try:
-            bot.send_message(ADMIN_ID, alert, parse_mode="Markdown")
+            tgbot.send_message(ADMIN_ID, alert, parse_mode="Markdown")
         except Exception as e:
             log.error("Failed to send ink alert: %s", e)
 

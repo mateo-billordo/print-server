@@ -1,6 +1,6 @@
 from telebot import types
 
-from bot.config import ADMIN_ID, MSGS, bot, jobs_lock, user_jobs
+from bot.config import ADMIN_ID, MSGS, tgbot, jobs_lock, user_jobs
 from bot.db import db_query
 
 

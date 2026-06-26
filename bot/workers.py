@@ -11,7 +11,7 @@ from bot.config import (
     PRINTER_NAME, PRINTER_CHECK_INTERVAL, PAGE_LOG_PATH,
     LOG_POLL_SECONDS, PRINT_DIR, UNASSIGNED_USER_ID,
     ADMIN_ID, HP_USB_ID,
-    bot, MSGS, log,
+    tgbot, MSGS, log,
     tracked_jobs, tracked_jobs_lock,
     email_wake_event,
 )
@@ -116,7 +116,7 @@ def printer_status_watcher():
                     reason = result.stdout.strip()
                     msg_key = "printer_alert" if usb_connected else "printer_alert_hw_off"
                     try:
-                        bot.send_message(
+                        tgbot.send_message(
                             ADMIN_ID,
                             MSGS[msg_key].format(status=reason),
                             parse_mode="Markdown"
@@ -238,7 +238,7 @@ def process_email_attachments(msg, sender_email: str):
     if printed_files and user_id != UNASSIGNED_USER_ID:
         try:
             file_list = ", ".join(printed_files)
-            bot.send_message(user_id, MSGS["email_print_notify"].format(
+            tgbot.send_message(user_id, MSGS["email_print_notify"].format(
                 files=file_list, copies=copies, mode="Color" if color_mode == "Color" else "B&N"
             ), parse_mode="Markdown")
         except Exception as e:
