@@ -609,6 +609,11 @@ JOB_POLL_INTERVAL = 2  # seconds between lpstat checks
 JOB_POLL_TIMEOUT = 120  # max seconds to wait for a job to complete
 
 
+# Tracks jobs canceled by admin wipe — poll_job_completion checks this
+_wiped_jobs: set[str] = set()
+_wiped_jobs_lock = threading.Lock()
+
+
 def extract_printer_reason(lpstat_output: str) -> str:
     """Extract the error reason from lpstat -p output (text after the last dash)."""
     for line in lpstat_output.strip().splitlines():
@@ -626,20 +631,30 @@ def extract_printer_reason(lpstat_output: str) -> str:
 
 def poll_job_completion(job_id: str) -> tuple[str, str]:
     """Poll lpstat until job completes. Returns (status, reason).
-    status: 'completed', 'error', or 'timeout'. reason: printer error detail or empty."""
+    status: 'completed', 'error', 'canceled', or 'timeout'. reason: printer error detail or empty."""
     full_id = f"{PRINTER_NAME}-{job_id}"
     elapsed = 0
     while elapsed < JOB_POLL_TIMEOUT:
         time.sleep(JOB_POLL_INTERVAL)
         elapsed += JOB_POLL_INTERVAL
+
+        # Check if job was wiped by admin
+        with _wiped_jobs_lock:
+            if job_id in _wiped_jobs:
+                _wiped_jobs.discard(job_id)
+                return ("canceled", "")
+
+        # Check printer state (detects paper jam even while job is still queued)
+        printer_status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
+        if "disabled" in printer_status.stdout.lower() or "stopped" in printer_status.stdout.lower():
+            reason = extract_printer_reason(printer_status.stdout)
+            return ("error", reason)
+
+        # Check if job is still in active queue
         result = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
         if full_id not in result.stdout:
-            # Job left the active queue — check if printer got disabled (error)
-            status = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True, text=True)
-            if "disabled" in status.stdout.lower():
-                reason = extract_printer_reason(status.stdout)
-                return ("error", reason)
             return ("completed", "")
+
     return ("timeout", "")
 
 
@@ -762,6 +777,10 @@ def execute_print_job(chat_id: int, job: dict):
                 add_pages(bw=0, color=copies)
             log.info("Job %s completed: +%d %s pages", job_id, copies, job["color"])
             bot.send_message(chat_id, MSGS["print_success"].format(file=job["file_name"]), parse_mode="Markdown")
+            bot.send_message(chat_id, MSGS["menu_prompt"],
+                             reply_markup=build_single_menu_button(), parse_mode="Markdown")
+        elif status == "canceled":
+            bot.send_message(chat_id, MSGS["print_canceled"].format(file=job["file_name"]), parse_mode="Markdown")
             bot.send_message(chat_id, MSGS["menu_prompt"],
                              reply_markup=build_single_menu_button(), parse_mode="Markdown")
         elif status == "error":
@@ -1380,10 +1399,18 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
+        # Generate a simple test page (host testprint file not available inside container)
+        test_file = "/tmp/testpage.txt"
+        with open(test_file, "w") as f:
+            f.write(f"=== PAGINA DE PRUEBA ===\n\nImpresora: {PRINTER_NAME}\nBot Print Server OK\n")
         result = subprocess.run(
-            ["lp", "-d", PRINTER_NAME, "/usr/share/cups/data/testprint"],
+            ["lp", "-d", PRINTER_NAME, test_file],
             capture_output=True, text=True
         )
+        try:
+            os.remove(test_file)
+        except OSError:
+            pass
         if result.returncode == 0:
             bot.edit_message_text(MSGS["testpage_sent"], chat_id, msg_id,
                                  reply_markup=build_tinta_sub_menu())
@@ -1421,6 +1448,17 @@ def handle_callback(call):
         if chat_id != ADMIN_ID:
             return
         bot.answer_callback_query(call.id)
+        # Capture current job IDs before wiping so poll_job_completion can detect cancellation
+        queued = subprocess.run(["lpstat", "-o", PRINTER_NAME], capture_output=True, text=True)
+        if queued.stdout:
+            with _wiped_jobs_lock:
+                for line in queued.stdout.strip().splitlines():
+                    parts = line.split()
+                    if parts:
+                        # Job ID format: "HP-2515-123" → extract "123"
+                        job_full = parts[0]
+                        job_num = job_full.rsplit("-", 1)[-1]
+                        _wiped_jobs.add(job_num)
         subprocess.run(["cancel", "-a", PRINTER_NAME], capture_output=True, text=True)
         bot.edit_message_text(MSGS["queue_wiped"], chat_id, msg_id,
                              reply_markup=build_tinta_sub_menu())

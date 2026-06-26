@@ -16,6 +16,7 @@
   "print_success": "✅ *¡Impresión lista!*\nTu documento `{file}` se imprimió correctamente.",
   "print_failed": "❌ *Error al imprimir*\nEl archivo `{file}` falló durante la impresión. Revisá la impresora.",
   "print_failed_reason": "❌ *Error al imprimir*\nEl archivo `{file}` falló durante la impresión.\n\n🔎 *Motivo:* `{reason}`",
+  "print_canceled": "🚫 *Impresión cancelada*\nEl archivo `{file}` fue cancelado por el administrador.",
   "print_timeout": "⚠️ El archivo `{file}` sigue en cola después de 2 minutos. Puede que la impresora esté ocupada.",
   "print_error": "❌ Hubo un error al intentar enviar el archivo a la impresora.",
   "cancelled": "❌ Impresión cancelada.",
